@@ -1,6 +1,6 @@
 # Privacy, reliability and interface review
 
-Observed 2026-09-30. Status: implemented and locally tested; not tested in a live Google deployment. No certification, production-readiness, zero-vulnerability or zero-bug claim is made.
+Observed 2026-09-30. Status: implemented and locally tested; saved source checked in the isolated Google editor, but application behavior not tested in a live Google deployment. No certification, production-readiness, zero-vulnerability or zero-bug claim is made.
 
 ## Implemented changes
 
@@ -32,6 +32,8 @@ The patch now preserves the original, candidate and safety snapshot on every fai
 **Additional live gate:** inject response loss after quiesce, pointer switch, activation and rollback; deny pointer readback and MAINTENANCE writes; fail completion audit separately. Verify preserved files and the physical live pointer directly in Google. Verify ordinary app requests are denied during MAINTENANCE. Test browser/network response loss and establish an operator reconciliation procedure before release.
 
 **Performance scope:** fresh state reads are added to the protected restore operation; normal timer/report paths are unchanged by this continuation. Computed compressed HTML is now 42,678 / 41,746 / 41,725 bytes for User / Admin / SuperAdmin (345 bytes more per portal than the previous continuation). No Google latency benchmark or overall speedup has been established.
+
+**Current external evidence:** both GitHub CI jobs passed for branch head `0a6b31b4b558e055de6101e0890c182b5797568b`, observed 2026-09-30 19:56:59 UTC: [CI run](https://github.com/Bassam-Sheta/FLINK-time-complete/actions/runs/36768460217). At 20:02:04 UTC the five isolated staging files matched runtime `56b36aaa59cee0f2018fc25a2810c32b5eea4cd7` after editor reload and clipboard readback with line endings normalized. Existing staging bootstrap bindings were preserved; the manifest matched unchanged. This proves saved editor source, not execution, authorization, identity isolation, sharing, backup recovery or deployment behavior. The installing runtime pin targets that source commit.
 
 ## Previous continuation validation (historical)
 
@@ -87,4 +89,4 @@ SOC 2 is an examination and assurance report provided by qualified CPAs, not a b
 
 ## Current blockers and limits
 
-The inspected Google staging tab still shows the prepared New deployment dialog for the earlier runtime. Deployment/OAuth access approval remains pending. This patch has not been deployed, and no live application test has been executed in this turn. The source review and local checks do not establish Google identity behavior, live locks, quotas, sharing, backup restore, production latency, multi-day payroll correctness or certification. Organizational decisions/evidence and independent assessment remain outstanding.
+The inspected Google staging tab now shows the prepared New deployment dialog for runtime `56b36aa`, executing as the existing installation owner with access restricted to the organization domain. The five saved source files have been checked after reload. Deployment/OAuth access approval remains pending; the agent has not clicked Deploy or granted the four manifest scopes. No live application test has been executed in this continuation. The source review, editor save/readback and local checks do not establish Google identity behavior, live locks, quotas, sharing, backup restore, production latency, multi-day payroll correctness or certification. Organizational decisions/evidence and independent assessment remain outstanding.
