@@ -17,6 +17,7 @@ Thumbs.db
 
 # Generated visual walkthrough
 artifacts/screenshots/
+artifacts/evidence/
 *-tests.txt
 all-tests.txt
 wave*-tests.txt
