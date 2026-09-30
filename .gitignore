@@ -17,3 +17,9 @@ Thumbs.db
 
 # Generated visual walkthrough
 artifacts/screenshots/
+*-tests.txt
+all-tests.txt
+wave*-tests.txt
+.pw-browsers/
+
+dependency-audit.json

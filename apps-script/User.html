@@ -536,15 +536,8 @@
         </div>
         <div id="loginAlert" class="hidden" style="padding: 0.75rem; border-radius: 6px; background: rgba(239, 68, 68, 0.2); color: #F87171; font-size: 0.8rem; margin-bottom: 1.25rem;"></div>
         <form id="passwordLoginForm" onsubmit="handleLogin(event)">
-          <div style="margin-bottom: 1.25rem;">
-            <label for="loginUsername">Username</label>
-            <input type="text" id="loginUsername" required autocomplete="username" placeholder="e.g. employee">
-          </div>
-          <div style="margin-bottom: 1.75rem;">
-            <label for="loginPassword">Password</label>
-            <input type="password" id="loginPassword" required autocomplete="current-password">
-          </div>
-          <button type="submit" class="btn" style="width: 100%;">Sign In</button>
+          <p style="margin-bottom:1.5rem">Continue with the Google Workspace account currently signed in. Your authenticator is required to access FLINK.</p>
+          <button type="submit" class="btn" style="width: 100%;">Continue with Google</button>
         </form>
         <form id="mfaLoginForm" class="hidden" onsubmit="handleMfaVerification(event)">
           <div style="margin-bottom:0.75rem; font-weight:700;">Two-Factor Verification</div>
@@ -759,7 +752,8 @@
         </div>
         <div class="grid-2" id="accountDetails"></div>
         <div style="display:flex; gap:0.75rem; margin-top:1.5rem;">
-          <button class="btn" onclick="openPasswordChangeModal()">Change Password</button>
+          <button class="btn" onclick="openPasswordChangeModal()">Google Account Security</button>
+          <button class="btn btn-secondary" onclick="openMfaModal()">Set up / Replace MFA</button>
           <button class="btn btn-secondary" onclick="logout()">Sign Out</button>
         </div>
       </div>
@@ -984,13 +978,7 @@
         return privilegedStepUpToken;
       }
 
-      const currentPassword = prompt(
-        'Security verification: re-enter your Super Admin password.'
-      );
-      if (!currentPassword) {
-        throw new Error('Super Admin reauthentication was cancelled.');
-      }
-
+      const currentPassword = undefined;
       const totpCode = prompt(
         'Enter a fresh 6-digit code from your authenticator app. If you just used the current code to sign in, wait for the next code.'
       );
@@ -1038,6 +1026,7 @@
         if (!setup.initialized && !state.token) {
           if (EMBED_MODE === 'SUPER_ADMIN') {
             document.getElementById('setupWizardContainer').classList.remove('hidden');
+            document.getElementById('loginView').classList.remove('hidden');
           } else {
             showLogin();
             const alertBox = document.getElementById('loginAlert');
@@ -1052,7 +1041,8 @@
         try {
           const res = await apiCall('auth.validateSession');
           state.user = normalizeUser(res.user, res.role);
-          initApp();
+          if (res.mfaEnrollmentRequired) showRequiredEnrollment();
+          else initApp();
         } catch (e) {
           sessionStorage.removeItem('flink_session_token');
           state.token = '';
@@ -1082,8 +1072,8 @@
       const mfaCode = document.getElementById('mfaCode');
       if (mfaCode) mfaCode.value = '';
 
-      if (state.user.mustChangePassword) {
-        openPasswordChangeModal();
+      if (res.mfaEnrollmentRequired) {
+        showRequiredEnrollment();
       } else {
         initApp();
       }
@@ -1102,8 +1092,7 @@
       state.pendingMfaChallengeToken = '';
       document.getElementById('mfaLoginForm').classList.add('hidden');
       document.getElementById('passwordLoginForm').classList.remove('hidden');
-      document.getElementById('loginPassword').value = '';
-      document.getElementById('loginPassword').focus();
+      document.querySelector('#passwordLoginForm button').focus();
     }
 
     async function handleMfaVerification(e) {
@@ -1131,8 +1120,8 @@
 
     async function handleLogin(e) {
       e.preventDefault();
-      const username = document.getElementById('loginUsername').value;
-      const password = document.getElementById('loginPassword').value;
+      const username = undefined;
+      const password = undefined;
       const alertBox = document.getElementById('loginAlert');
       alertBox.classList.add('hidden');
 
@@ -1144,7 +1133,7 @@
         }
         completeBrowserLogin(res);
       } catch (err) {
-        alertBox.innerText = err.message || 'Invalid username or password.';
+        alertBox.innerText = err.message || 'Google sign-in could not be verified.';
         alertBox.classList.remove('hidden');
       }
     }
@@ -1159,6 +1148,11 @@
       document.getElementById('appHeader').classList.remove('hidden');
       document.getElementById('userDisplayName').innerText = state.user.displayName || state.user.username;
       document.getElementById('userRoleBadge').innerText = state.user.role;
+      if (state.user.role === 'SUPER_ADMIN' && state.setupStatus && !state.setupStatus.setupComplete) {
+        document.getElementById('appHeader').classList.add('hidden');
+        document.getElementById('setupWizardContainer').classList.remove('hidden');
+        renderWizardStep(2); return;
+      }
 
       // Load Workspaces
       try {
@@ -1981,74 +1975,87 @@
       });
     }
 
-    function openPasswordChangeModal() {
+
+    function openMfaModal() {
       const modal = document.getElementById('modalContainer');
       modal.replaceChildren();
       const backdrop = document.createElement('div');
       backdrop.className = 'modal-backdrop';
       const box = document.createElement('div');
       box.className = 'modal';
-
-      const title = document.createElement('h3');
-      title.textContent = 'Change Password';
-      const oldLabel = document.createElement('label');
-      oldLabel.textContent = 'Current Password';
-      const oldInput = document.createElement('input');
-      oldInput.id = 'accountOldPassword';
-      oldInput.type = 'password';
-      oldInput.autocomplete = 'current-password';
-
-      const newLabel = document.createElement('label');
-      newLabel.style.marginTop = '0.75rem';
-      newLabel.textContent = 'New Password';
-      const newInput = document.createElement('input');
-      newInput.id = 'accountNewPassword';
-      newInput.type = 'password';
-      newInput.autocomplete = 'new-password';
-
-      const actions = document.createElement('div');
-      actions.style.display = 'flex';
-      actions.style.gap = '0.75rem';
-      actions.style.justifyContent = 'flex-end';
-      actions.style.marginTop = '1.25rem';
+      const title = document.createElement('h2');
+      title.textContent = 'Set up or replace authenticator';
+      const note = document.createElement('p');
+      note.textContent = 'Your signed-in Google account verifies your identity. When replacing MFA, enter a fresh code from the existing authenticator.';
+      const input = (id, label, type) => {
+        const wrap = document.createElement('label');
+        wrap.textContent = label;
+        const field = document.createElement('input');
+        field.id = id; field.type = type; field.autocomplete = 'off';
+        wrap.appendChild(field); box.appendChild(wrap); return field;
+      };
+      box.append(title, note);
+      const password = { value: undefined };
+      const previousCode = input('mfaPreviousCode', 'Existing authenticator code (replacement only)', 'text');
+      previousCode.inputMode = 'numeric'; previousCode.maxLength = 6;
+      const status = document.createElement('p');
+      status.setAttribute('role', 'status');
+      const secret = document.createElement('code');
+      secret.id = 'mfaEnrollmentSecret';
+      const link = document.createElement('a');
+      link.textContent = 'Open in authenticator'; link.hidden = true;
+      const start = document.createElement('button');
+      start.className = 'btn'; start.textContent = 'Generate enrollment secret';
+      const newCode = input('mfaConfirmationCode', 'New authenticator code', 'text');
+      newCode.inputMode = 'numeric'; newCode.maxLength = 6; newCode.disabled = true;
+      const confirm = document.createElement('button');
+      confirm.className = 'btn'; confirm.textContent = 'Confirm MFA'; confirm.disabled = true;
+      start.onclick = async () => {
+        start.disabled = true;
+        try {
+          const result = await apiCall('auth.enrollMfa', { currentPassword: password.value, currentMfaCode: previousCode.value });
+          previousCode.value = '';
+          secret.textContent = result.secret;
+          link.href = result.qrUri; link.hidden = false;
+          status.textContent = 'Keep this secret private. Add it to your authenticator, then confirm a new code. Expires at ' + result.expiresAt;
+          newCode.disabled = false; confirm.disabled = false;
+        } catch (e) { status.textContent = e.message || 'Enrollment failed.'; }
+        finally { start.disabled = false; }
+      };
+      confirm.onclick = async () => {
+        confirm.disabled = true;
+        try {
+          const result = await apiCall('auth.confirmMfa', { code: newCode.value });
+          if (result.sessionToken) {
+            privilegedStepUpToken = ''; privilegedStepUpExpiresAt = 0;
+            state.token = result.sessionToken;
+            sessionStorage.setItem('flink_session_token', state.token);
+          }
+          closeModal(); alert('Authenticator enabled. Use the next fresh code for protected actions.');
+          if (state.awaitingMfaEnrollment) {
+            state.awaitingMfaEnrollment = false;
+            if (state.pendingSetupContinuation) { state.pendingSetupContinuation = false; renderWizardStep(2); }
+            else initApp();
+          }
+        } catch (e) { status.textContent = e.message || 'Confirmation failed.'; confirm.disabled = false; }
+      };
       const cancel = document.createElement('button');
-      cancel.className = 'btn btn-secondary';
-      cancel.textContent = 'Cancel';
-      cancel.onclick = closeModal;
-      const save = document.createElement('button');
-      save.className = 'btn';
-      save.textContent = 'Change Password';
-      save.onclick = submitPasswordChange;
-      actions.append(cancel, save);
-      box.append(title, oldLabel, oldInput, newLabel, newInput, actions);
-      backdrop.appendChild(box);
-      modal.appendChild(backdrop);
+      cancel.className = 'btn btn-secondary'; cancel.textContent = 'Close'; cancel.onclick = closeModal;
+      box.append(status, secret, link, start, confirm, cancel);
+      backdrop.appendChild(box); modal.appendChild(backdrop);
     }
 
-    async function submitPasswordChange() {
-      const oldPassword = document.getElementById('accountOldPassword').value;
-      const newPassword = document.getElementById('accountNewPassword').value;
-      try {
-        const result = await apiCall('auth.changePassword', {
-          oldPassword,
-          newPassword
-        });
-        state.token = result.sessionToken;
-        sessionStorage.setItem('flink_session_token', state.token);
-        closeModal();
-        alert('Password changed successfully.');
-        if (!document.getElementById('accountView').classList.contains('hidden')) {
-          renderAccountView();
-        } else {
-          initApp();
-        }
-      } catch (e) {
-        alert(e.message || 'Password change failed.');
-      }
+    function showRequiredEnrollment() {
+      state.awaitingMfaEnrollment = true;
+      document.getElementById('loginView').classList.add('hidden');
+      openMfaModal();
     }
 
-    /* ------------------- ADMIN DASHBOARD ------------------- */
-    /* ------------------- MANAGER / ADMIN WORKSPACE ------------------- */
+    function openPasswordChangeModal() {
+      window.open('https://myaccount.google.com/security', '_blank', 'noopener');
+    }
+
+
     function managerTargets() {
       if (state.managerWorkspaceFilter) {
         return (state.workspaces || []).filter(function(ws) {
@@ -2392,7 +2399,7 @@
 
             const reset = document.createElement('button');
             reset.className = 'btn btn-secondary btn-sm';
-            reset.textContent = 'Request Reset';
+            reset.textContent = 'Request Session Reset';
             reset.onclick = function() {
               submitManagerLifecycleRequest('PASSWORD_RESET', user.UserID);
             };
@@ -2579,11 +2586,9 @@
       const content = document.getElementById('wizardStepContent');
       if (step === 1) {
         content.innerHTML = `
-          <h2 style="margin-bottom: 0.5rem;">Step 1 — System Owner Registration</h2>
-          <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.5rem;">Create the root Super Admin account. First run requires the one-time installation key generated by the private server function initializeInstallation_().</p>
+          <h2>Step 1 — System Owner Registration</h2>
+          <p>Create the root account bound to the verified Google installation owner.</p>
           <div style="margin-bottom: 1rem;">
-            <label>One-Time Installation Key</label>
-            <input type="password" id="wzSetupKey" autocomplete="off" required>
           </div>
           <div style="margin-bottom: 1rem;">
             <label>Full Name</label>
@@ -2593,16 +2598,7 @@
             <label>Username</label>
             <input type="text" id="wzOwnerUser" value="admin" required>
           </div>
-          <div class="grid-2" style="margin-bottom: 1.5rem;">
-            <div>
-              <label>Password (min 12 characters)</label>
-              <input type="password" id="wzOwnerPass" autocomplete="new-password" required>
-            </div>
-            <div>
-              <label>Confirm Password</label>
-              <input type="password" id="wzOwnerPassConfirm" autocomplete="new-password" required>
-            </div>
-          </div>
+          <p>Google manages your password. Enroll an authenticator after creating your FLINK account.</p>
           <button class="btn" style="width: 100%;" onclick="submitWizardStep1()">NEXT: Company Settings →</button>
         `;
       } else if (step === 2) {
@@ -2693,10 +2689,7 @@
               <input type="email" id="wzAdminEmail" placeholder="admin@company.com">
             </div>
           </div>
-          <div style="margin-bottom:1rem;">
-            <label>Temporary Password</label>
-            <input type="password" id="wzAdminPass" autocomplete="new-password">
-          </div>
+
           <div style="display: flex; gap: 1rem;">
             <button class="btn btn-secondary" onclick="renderWizardStep(3)">← Back</button>
             <button class="btn btn-secondary" onclick="renderWizardStep(5)">Skip For Now</button>
@@ -2731,10 +2724,7 @@
               <input type="text" id="wzEmpTitle" value="Operations Specialist">
             </div>
           </div>
-          <div style="margin-bottom: 1.5rem;">
-            <label>Temporary Password</label>
-            <input type="password" id="wzEmpPass" autocomplete="new-password">
-          </div>
+
           <div style="display: flex; gap: 1rem;">
             <button class="btn btn-secondary" onclick="renderWizardStep(4)">← Back</button>
             <button class="btn btn-secondary" onclick="renderWizardStep(6)">Skip For Now</button>
@@ -2836,18 +2826,18 @@
     }
 
     async function submitWizardStep1() {
-      const setupKey = document.getElementById('wzSetupKey').value;
       const fullName = document.getElementById('wzOwnerName').value;
       const username = document.getElementById('wzOwnerUser').value;
-      const password = document.getElementById('wzOwnerPass').value;
-      const confirmPassword = document.getElementById('wzOwnerPassConfirm').value;
+      const password = undefined;
+      const confirmPassword = undefined;
 
       try {
-        const res = await apiCall('setup.completeStep', { step: 1, setupKey, fullName, username, password, confirmPassword });
+        const res = await apiCall('setup.completeStep', { step: 1, fullName, username });
         state.token = res.sessionToken;
         state.user = res.user;
         sessionStorage.setItem('flink_session_token', res.sessionToken);
-        renderWizardStep(2);
+        state.pendingSetupContinuation = true;
+        showRequiredEnrollment();
       } catch (e) {
         alert(e.message || 'Failed to initialize Super Admin.');
       }
@@ -2891,7 +2881,7 @@
           fullName: document.getElementById('wzAdminName').value,
           username: document.getElementById('wzAdminUser').value,
           email: document.getElementById('wzAdminEmail').value,
-          temporaryPassword: document.getElementById('wzAdminPass').value,
+          temporaryPassword: '',
           workspaceIds: [state.currentWorkspace]
         });
         renderWizardStep(5);
@@ -2910,7 +2900,7 @@
             email: document.getElementById('wzEmpEmail').value,
             department: document.getElementById('wzEmpDept').value,
             jobTitle: document.getElementById('wzEmpTitle').value,
-            temporaryPassword: document.getElementById('wzEmpPass').value,
+            temporaryPassword: '',
             workspaceId: state.currentWorkspace
           }]
         });
@@ -3291,8 +3281,8 @@
                       <td><span class="badge badge-${safeClassToken(u.Status, 'active')}">${escapeHtml(u.Status)}</span></td>
                       <td>${escapeHtml(u.PrimaryWorkspaceID || '-')}</td>
                       <td>
-                        <button class="btn btn-secondary btn-sm" onclick='openPasswordResetWizard(${htmlJsArg(u.UserID)})'>Reset Pwd</button>
-                        ${u.Status === 'ACTIVE' 
+                        <button class="btn btn-secondary btn-sm" onclick='openPasswordResetWizard(${htmlJsArg(u.UserID)})'>Security Recovery</button>
+                        ${u.Status === 'ACTIVE'
                           ? `<button class="btn btn-danger btn-sm" onclick='makeUserPassiveDirect(${htmlJsArg(u.UserID)})'>Passive</button>`
                           : `<button class="btn btn-success btn-sm" onclick='activateUserDirect(${htmlJsArg(u.UserID)})'>Activate</button>`}
                         <button class="btn btn-secondary btn-sm" onclick='forceLogoutUser(${htmlJsArg(u.UserID)})'>Logout</button>
@@ -3989,9 +3979,9 @@
       idLine.textContent = 'Backup ID: ' + String(backupId || '');
 
       const passwordLabel = document.createElement('label');
-      passwordLabel.textContent = 'Confirm Super Admin Password';
+      passwordLabel.textContent = 'Restore requires Google identity and fresh MFA verification.';
       const password = document.createElement('input');
-      password.type = 'password';
+      password.type = 'hidden';
       password.id = 'restoreAdminPassword';
       password.autocomplete = 'current-password';
 
@@ -4027,8 +4017,8 @@
       const modal = document.getElementById('modalContainer');
       const backupId = modal.dataset.restoreBackupId || '';
       const adminPassword = document.getElementById('restoreAdminPassword')?.value || '';
-      if (!backupId || !adminPassword) {
-        return alert('Backup ID and Super Admin password are required.');
+      if (!backupId) {
+        return alert('Backup ID is required.');
       }
 
       try {
@@ -4369,10 +4359,7 @@
                 </select>
               </div>
             </div>
-            <div style="margin-bottom: 1.5rem;">
-              <label>Temporary Password</label>
-              <input type="password" id="newUserPass" autocomplete="new-password" required>
-            </div>
+
             <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
               <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
               <button class="btn" onclick="submitCreateUser()">Create User</button>
@@ -4387,7 +4374,7 @@
       const username = document.getElementById('newUserUsername').value;
       const email = document.getElementById('newUserEmail').value;
       const role = document.getElementById('newUserRole').value;
-      const temporaryPassword = document.getElementById('newUserPass').value;
+      const temporaryPassword = '';
       try {
         await apiCall('users.create', {
           displayName,
@@ -4431,95 +4418,34 @@
 
     function openPasswordResetWizard(userId) {
       const user = (state.users || []).find(item => item.UserID === userId);
-      if (!user) return alert('User record is not available. Refresh the Users view and try again.');
-
-      let tempPass;
-      try {
-        tempPass = generateTemporaryPassword();
-      } catch (e) {
-        return alert(e.message);
-      }
-
+      if (!user) return alert('Refresh Users and try again.');
       const modal = document.getElementById('modalContainer');
       modal.replaceChildren();
-      modal.dataset.targetUserId = String(userId);
-
-      const backdrop = document.createElement('div');
-      backdrop.className = 'modal-backdrop';
-      const box = document.createElement('div');
-      box.className = 'modal';
-
-      const title = document.createElement('h3');
-      title.style.marginBottom = '0.5rem';
-      title.textContent = 'Password Reset Wizard';
-
-      const intro = document.createElement('p');
-      intro.style.color = 'var(--text-secondary)';
-      intro.style.fontSize = '0.85rem';
-      intro.style.marginBottom = '1.25rem';
-      intro.append(
-        document.createTextNode('Resetting credentials for '),
-        (() => {
-          const strong = document.createElement('strong');
-          strong.textContent = String(user.Username || user.DisplayName || userId);
-          return strong;
-        })(),
-        document.createTextNode('. Original password is never displayed.')
-      );
-
-      const field = document.createElement('div');
-      field.style.marginBottom = '1rem';
-      const label = document.createElement('label');
-      label.textContent = 'Generated Temporary Password';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.id = 'resetTempPass';
-      input.readOnly = true;
-      input.style.fontFamily = 'var(--font-mono)';
-      input.value = tempPass;
-      field.append(label, input);
-
-      const note = document.createElement('div');
-      note.style.marginBottom = '1.5rem';
-      note.style.fontSize = '0.85rem';
-      note.style.color = 'var(--text-secondary)';
-      note.textContent = 'Password change will be forced on next sign-in and all active sessions will be revoked.';
-
-      const actions = document.createElement('div');
-      actions.style.display = 'flex';
-      actions.style.gap = '0.75rem';
-      actions.style.justifyContent = 'flex-end';
-
-      const cancel = document.createElement('button');
-      cancel.className = 'btn btn-secondary';
-      cancel.textContent = 'Cancel';
-      cancel.onclick = closeModal;
-
-      const confirm = document.createElement('button');
-      confirm.className = 'btn btn-warning';
-      confirm.textContent = 'Confirm Reset & Copy';
-      confirm.onclick = submitPasswordReset;
-
-      actions.append(cancel, confirm);
-      box.append(title, intro, field, note, actions);
-      backdrop.appendChild(box);
-      modal.appendChild(backdrop);
-    }
-
-    async function submitPasswordReset() {
-      const modal = document.getElementById('modalContainer');
-      const userId = modal.dataset.targetUserId || '';
-      const tempPassword = document.getElementById('resetTempPass')?.value || '';
-      if (!userId || !tempPassword) return alert('Password reset context is missing. Close the dialog and try again.');
-
-      try {
-        await apiCall('users.resetPassword', { targetUserId: userId, temporaryPassword: tempPassword });
-        await navigator.clipboard.writeText(tempPassword);
-        alert('Password reset successfully. Temporary password copied to clipboard.');
-        closeModal();
-      } catch (e) {
-        alert(e.message);
-      }
+      const backdrop = document.createElement('div'); backdrop.className = 'modal-backdrop';
+      const box = document.createElement('div'); box.className = 'modal';
+      const title = document.createElement('h3'); title.textContent = 'Security recovery';
+      const note = document.createElement('p');
+      note.textContent = 'Google manages passwords. Reset FLINK sessions or the authenticator for ' + user.Username + '. MFA reset requires a fresh code from your own authenticator. The user must enroll MFA again.';
+      const label = document.createElement('label'); label.textContent = 'Your fresh authenticator code (for MFA reset)';
+      const code = document.createElement('input'); code.inputMode = 'numeric'; code.maxLength = 6; code.autocomplete = 'one-time-code';
+      const status = document.createElement('p'); status.setAttribute('role','status');
+      const reset = document.createElement('button'); reset.className = 'btn'; reset.textContent = 'Reset FLINK sessions';
+      reset.onclick = async () => {
+        reset.disabled = true;
+        try { await apiCall('users.forceLogout', {targetUserId:userId}); status.textContent = 'FLINK sessions revoked.'; }
+        catch (e) { status.textContent = e.message; }
+        finally { reset.disabled = false; }
+      };
+      const mfa = document.createElement('button'); mfa.className = 'btn btn-warning'; mfa.textContent = 'Reset authenticator';
+      mfa.disabled = user.Role === 'SUPER_ADMIN';
+      mfa.onclick = async () => {
+        mfa.disabled = true;
+        try { await apiCall('auth.disableMfa', {targetUserId:userId,adminTotpCode:code.value}); code.value = ''; status.textContent = 'Authenticator reset; sessions revoked. User must enroll again.'; }
+        catch (e) { status.textContent = e.message; }
+        finally { mfa.disabled = false; }
+      };
+      const close = document.createElement('button'); close.className = 'btn btn-secondary'; close.textContent = 'Close'; close.onclick = closeModal;
+      box.append(title,note,label,code,status,reset,mfa,close); backdrop.append(box); modal.append(backdrop);
     }
 
     function openDeleteWorkspaceModal(wsId) {
@@ -4567,9 +4493,9 @@
       const passField = document.createElement('div');
       passField.style.marginBottom = '1.5rem';
       const passLabel = document.createElement('label');
-      passLabel.textContent = 'Super Admin Password';
+      passLabel.textContent = 'Fresh authenticator verification is required.';
       const passInput = document.createElement('input');
-      passInput.type = 'password';
+      passInput.type = 'hidden';
       passInput.id = 'confirmAdminPassInput';
       passInput.autocomplete = 'current-password';
       passField.append(passLabel, passInput);

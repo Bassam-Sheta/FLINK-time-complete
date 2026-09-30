@@ -113,6 +113,7 @@ function fixture(options = {}) {
 
   delete require.cache[require.resolve(authPath)];
   const AuthService = require(authPath).AuthService;
+  require(authPath).CONSTANTS.AUTH_MODE = 'PASSWORD'; // Retained legacy migration path.
   AuthService._mfaChallengeMemory = {};
 
   return {

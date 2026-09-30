@@ -107,6 +107,8 @@ function loadFixture() {
   delete global.PropertiesService;
   delete require.cache[require.resolve(servicePath)];
   const AuthService = require(servicePath).AuthService;
+  // Exercise the retained legacy migration implementation explicitly.
+  require(servicePath).CONSTANTS.AUTH_MODE = 'PASSWORD';
   AuthService._mfaChallengeMemory = {};
   AuthService._mfaEnrollmentMemory = {};
 

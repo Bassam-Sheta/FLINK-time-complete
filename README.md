@@ -1,6 +1,8 @@
 # FLINK Time & Workforce Platform
 
-Google Workspace-native time tracking and workforce management.
+Google Workspace-native time tracking and workforce management. This edition uses server-observed Google identity plus mandatory app MFA; FLINK does not ask for or store Google passwords.
+
+**Validation status:** source and local automated tests have been checked. The provided staging project currently has no deployment; installation, OAuth consent, Sheets/Drive operations, real account isolation, and scheduled triggers remain untested in Google. See [release verification and remaining work](docs/RELEASE_VERIFICATION.md).
 
 ## Install FLINK Time
 
@@ -45,7 +47,11 @@ Portal rule:
 ## Repository folders
 
 ```
-apps-script/       five-file production application
+src/backend/       ordered editable backend modules
+src/portals/       shared GUI template and role-specific fragments
+scripts/build.cjs  deterministic five-file build
+vendor/            pinned cryptographic library and license
+apps-script/       generated five-file deployment application
 installer/         separate automated deployment application
 tests/             automated regression/security/browser tests
 docs/              installation, architecture, and security documentation
@@ -57,8 +63,14 @@ npm, Node.js, Playwright, and GitHub Actions are development/CI tools only.
 ## Developers
 
 ```bash
+npm ci --ignore-scripts
+npm run build
 npm test
+npx playwright install chromium
+npx playwright test --project=chromium
 ```
+
+Edit `src/` and rebuild; do not edit generated `apps-script/Code.gs` or portal HTML directly. `npm test` rejects stale generated files. Authentication passwords are managed in Google Account; Super Admin security recovery provides FLINK session revocation and authenticator reset. Root MFA recovery is owner-controlled and is not exposed in generic web CRUD.
 
 GitHub Actions runs regression/security tests, browser acceptance, and real portal screenshot capture for pull requests and `main`.
 

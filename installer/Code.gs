@@ -45,6 +45,7 @@ function installFlinkTime() {
 
   let spreadsheetId = '';
   let installed = false;
+  let cleanupSucceeded = null;
 
   try {
     const ownerEmail = getInstallerEmail_();
@@ -126,7 +127,7 @@ function installFlinkTime() {
     };
   } catch (err) {
     if (spreadsheetId && !installed) {
-      cleanupFailedInstallation_(spreadsheetId);
+      cleanupSucceeded = cleanupFailedInstallation_(spreadsheetId);
     }
 
     console.error(
@@ -139,12 +140,15 @@ function installFlinkTime() {
       : 'INSTALL_FAILED';
     const message = err && err.safeMessage
       ? err.safeMessage
-      : 'FLINK Time could not be installed. No incomplete Master Sheet was kept.';
+      : 'FLINK Time could not be installed. Check the cleanup status before retrying.';
 
     return {
       ok: false,
       code: code,
       message: message,
+      cleanupSucceeded: cleanupSucceeded,
+      incompleteSpreadsheetUrl: cleanupSucceeded === false && spreadsheetId
+        ? 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(spreadsheetId) + '/edit' : '',
       apiSettingsUrl: INSTALLER_LINKS.apiSettings
     };
   } finally {
@@ -291,12 +295,15 @@ function callAppsScriptApi_(method, path, body) {
     parsed && parsed.error && parsed.error.message || ''
   );
 
-  if (status === 401 || status === 403) {
+  if (status === 403 && /apps script api.*(disabled|not enabled)|script management.*disabled|access.*not enabled/i.test(apiMessage)) {
     throw installerError_(
       'SCRIPT_API_ACCESS_REQUIRED',
       'Google Apps Script API access is not enabled for this account. Open the Apps Script API settings, enable access, then run Install again.'
     );
   }
+
+  if (status === 401) throw installerError_('GOOGLE_AUTH_REQUIRED', 'Google authorization expired or is missing. Sign in and authorize the installer again.');
+  if (status === 403) throw installerError_('GOOGLE_PERMISSION_DENIED', 'Google denied this operation. Check Workspace administrator policies, installer OAuth scopes, and Apps Script API access.');
 
   console.error(
     'Apps Script API request failed (' + status + '): ' + apiMessage
@@ -328,11 +335,13 @@ function extractWebAppUrl_(deployment) {
 function cleanupFailedInstallation_(spreadsheetId) {
   try {
     DriveApp.getFileById(spreadsheetId).setTrashed(true);
+    return true;
   } catch (cleanupErr) {
     console.error(
       'Failed to trash incomplete FLINK Time Master Sheet: ' +
       (cleanupErr && cleanupErr.message ? cleanupErr.message : String(cleanupErr))
     );
+    return false;
   }
 }
 

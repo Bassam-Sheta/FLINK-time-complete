@@ -48,6 +48,7 @@ function fixture() {
   };
   global.Validation = { validatePassword(v) { return v; } };
   global.SecurityService = {
+    hashToken(value) { return 'HASH_' + value; },
     verifyPassword(password, hash) {
       if (hash === 'OLDHASH') return password === 'OldPass123!';
       return false;
@@ -93,6 +94,8 @@ function fixture() {
 
   delete require.cache[require.resolve(servicePath)];
   const AuthService = require(servicePath).AuthService;
+  // Exercise the retained legacy migration implementation explicitly.
+  require(servicePath).CONSTANTS.AUTH_MODE = 'PASSWORD';
   AuthService._mfaChallengeMemory = {};
 
   return {

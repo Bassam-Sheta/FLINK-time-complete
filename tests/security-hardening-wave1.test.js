@@ -99,6 +99,7 @@ test('Apps Script manifest excludes unused advanced services and broad unused sc
     manifest.oauthScopes.slice().sort(),
     [
       'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/script.scriptapp',
       'https://www.googleapis.com/auth/spreadsheets',
       'https://www.googleapis.com/auth/userinfo.email'
     ].sort()

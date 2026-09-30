@@ -122,7 +122,9 @@
       status.innerHTML =
         '<strong style="color:var(--red)">Installation did not complete.</strong>' +
         '<p>' + escapeHtml(result && result.message || 'Unknown installation error.') + '</p>' +
-        settings;
+        settings + (result && result.cleanupSucceeded === false
+          ? '<p>Automatic cleanup failed. Review the incomplete installation before retrying.</p><p><a target="_blank" rel="noopener" href="' + escapeHtml(result.incompleteSpreadsheetUrl) + '">Open incomplete Master Sheet</a></p>'
+          : result && result.cleanupSucceeded === true ? '<p>The incomplete Master Sheet was moved to trash.</p>' : '');
       return;
     }
 

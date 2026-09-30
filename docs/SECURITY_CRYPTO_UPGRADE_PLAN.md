@@ -1,3 +1,7 @@
+# Current edition
+
+The owner selected Google-managed primary sign-in plus app MFA. This release implements that selection and uses pinned TweetNaCl authenticated encryption for new MFA secrets. The PBKDF2 benchmark below is retained as historical background for the disabled app-password path. It is not an instruction to enable it. See [current evidence and remaining work](RELEASE_VERIFICATION.md).
+
 # FLINK Time — Remaining Crypto Security Upgrade Plan
 
 Status: **Prepared, not yet activated in production**

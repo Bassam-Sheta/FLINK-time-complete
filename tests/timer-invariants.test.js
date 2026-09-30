@@ -153,6 +153,25 @@ function fixture(options = {}) {
 
 const user = { userId:'U1', role:'USER' };
 
+test('auto-stop sweep caps timestamps and duration and remains idempotent with manual retry', () => {
+  const fx = fixture();
+  const timer = fx.TimerService.startTimer(user,'W1',{operationId:'auto-stop-12345678',projectId:'P1'});
+  const start = Date.now()-7200000;
+  fx.timers.W1.StartedAtUTC = new Date(start).toISOString();
+  global.MasterRepository.getGlobalSetting = () => '1';
+  global.SheetRepository.listActiveTimers = ws => fx.timers[ws] ? [fx.timers[ws]] : [];
+  const job = require(servicePath).JobService;
+  const first = job.dispatchAutoStop();
+  assert.equal(first.stopped,1);
+  assert.deepEqual(first.failures,[]);
+  assert.equal(job.dispatchAutoStop().stopped,0);
+  const replay = fx.TimerService.stopTimer(user,'W1',{timerId:timer.timerId});
+  assert.equal(replay.durationSeconds,3600);
+  assert.equal(new Date(replay.endUtc).getTime(),start+3600000);
+  assert.equal(fx.getEntryCreates(),1);
+  assert.equal(fx.getRollups(),1);
+});
+
 test('global timer scan fails closed when an ACTIVE workspace cannot be inspected', () => {
   const fx = fixture({ failScanWorkspace:'W2' });
 

@@ -167,7 +167,8 @@ const payload = { periodStart:START.toISOString(), periodEnd:END.toISOString() }
 test('submission snapshot captures full immutable state at post-submit version', () => {
   const fx = fixture();
   const result = fx.service.submitTimesheet(user, 'W1', payload);
-  const snapshot = JSON.parse(result.EntrySnapshotJSON);
+  assert.equal(result.EntrySnapshotJSON, undefined, 'internal financial snapshot must not leave the API');
+  const snapshot = JSON.parse(fx.timesheets[0].EntrySnapshotJSON);
 
   assert.equal(snapshot.length, 1);
   assert.deepEqual(snapshot[0], {

@@ -113,16 +113,19 @@
     const workspaceId = body && body.workspaceId ? body.workspaceId : 'W1';
 
     switch (action) {
+      case 'auth.enrollMfa':
+        return {secret:'SYNTHETICSECRET',qrUri:'otpauth://totp/FLINK:synthetic?secret=SYNTHETICSECRET',expiresAt:new Date(Date.now()+600000).toISOString()};
+      case 'auth.confirmMfa':
+        if (payload.code !== '123456') throw new Error('Invalid verification code.');
+        return {ok:true, sessionToken:'SESSION-MFA-ROTATED'};
       case 'setup.status':
         return {
           initialized: setupInitialized,
+          setupComplete: setupInitialized,
           currentStep: setupInitialized ? 9 : 0
         };
 
       case 'auth.login':
-        if (payload.username !== 'employee' || payload.password !== 'demo-pass') {
-          throw new Error('Invalid username or password.');
-        }
         return {
           mfaRequired: true,
           mfaChallengeToken: 'MFA_U1_demo_challenge',

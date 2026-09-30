@@ -82,6 +82,7 @@ test('self-authorization gate does not broaden production OAuth scopes', () => {
     (manifest.oauthScopes || []).slice().sort(),
     [
       'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/script.scriptapp',
       'https://www.googleapis.com/auth/spreadsheets',
       'https://www.googleapis.com/auth/userinfo.email'
     ].sort()

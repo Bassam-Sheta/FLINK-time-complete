@@ -43,7 +43,7 @@ jobs:
           node-version: '20'
 
       - name: Install browser test dependency
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund --ignore-scripts
 
       - name: Dependency advisory gate
         run: npm audit --audit-level=high
@@ -51,11 +51,8 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run normal employee browser flow
-        run: npm run test:human
-
-      - name: Capture real portal screenshots
-        run: npm run test:visual
+      - name: Run all local browser workflows and screenshots
+        run: npx playwright test --project=chromium
 
       - name: Upload visual walkthrough
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -59,6 +59,7 @@ test('new user is rolled back when workspace member provisioning fails', () => {
   };
   global.SpreadsheetApp = { flush() {} };
   global.MasterRepository = {
+    getTableData() { return {rows:[]}; },
     findAccountByUsername() { return null; },
     getWorkspace() { return { WorkspaceID: 'W1', Status: 'ACTIVE' }; },
     createAccount() { calls.push('create-account'); },
@@ -202,6 +203,7 @@ test('new user is rolled back when workspace ACL assignment fails', () => {
   };
   global.SpreadsheetApp = { flush(){} };
   global.MasterRepository = {
+    getTableData() { return {rows:[]}; },
     findAccountByUsername(){ return null; },
     getWorkspace(){ return { WorkspaceID:'W1', Status:'ACTIVE' }; },
     createAccount(){ calls.push('create-account'); },
@@ -278,6 +280,7 @@ test('successful user provisioning commits account, ACL, member, then audit', ()
   };
   global.SpreadsheetApp = { flush(){} };
   global.MasterRepository = {
+    getTableData() { return {rows:[]}; },
     findAccountByUsername(){ return null; },
     getWorkspace(){ return { WorkspaceID:'W1', Status:'ACTIVE' }; },
     createAccount(){ calls.push('create-account'); },

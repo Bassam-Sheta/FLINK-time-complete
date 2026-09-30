@@ -38,7 +38,7 @@ test('three portal files are bound to distinct embed modes', () => {
   assert.match(code, /superadmin:\s*'SuperAdmin'/);
 });
 
-test('all browser portals support password + MFA challenge login', () => {
+test('all browser portals support Google identity + MFA challenge login', () => {
   for (const portal of [user, admin, superAdmin]) {
     assert.match(portal, /id="passwordLoginForm"/);
     assert.match(portal, /id="mfaLoginForm"/);
