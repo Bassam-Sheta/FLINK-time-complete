@@ -323,6 +323,8 @@ const ACTION_PERMISSIONS = {
   'backups.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'backups.restoreValidate': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'backups.restoreApply': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'backups.restorePrepare': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'backups.restoreStatus': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'rollups.rebuild': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN], requiresWorkspace: true, isWrite: true },
 
   // Jobs & Capacity
@@ -357,6 +359,7 @@ const PRIVILEGED_STEP_UP_ACTIONS = new Set([
   'sessions.revoke',
   'backups.create',
   'backups.restoreApply',
+  'backups.restorePrepare',
   'jobs.dispatchHousekeeping',
   'jobs.dispatchRollups',
   'integrity.audit'
@@ -876,8 +879,15 @@ function dispatchAction_(action, data) {
         authContext,
         payload.workspaceId || wsId,
         payload.backupId,
-        payload.adminPassword
+        payload.adminPassword,
+        payload.operationId
       );
+
+    case 'backups.restorePrepare':
+      return BackupService.prepareRestore(authContext, payload.workspaceId || wsId, payload.backupId, payload.intentId, payload.previousOperationId);
+
+    case 'backups.restoreStatus':
+      return BackupService.restoreStatus(authContext, payload.workspaceId || wsId);
 
     case 'rollups.rebuild':
       return RollupService.rebuildRollups(wsId);

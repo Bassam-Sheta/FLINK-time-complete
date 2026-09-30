@@ -999,6 +999,7 @@
       'sessions.revoke',
       'backups.create',
       'backups.restoreApply',
+      'backups.restorePrepare',
       'jobs.dispatchHousekeeping',
       'jobs.dispatchRollups',
       'integrity.audit'
@@ -4075,11 +4076,11 @@
       }
     }
 
-    function openRestoreWizard(backupId) {
+    function openRestoreWizard(backupId, workspaceId = state.currentWorkspace) {
       const modal = document.getElementById('modalContainer');
       modal.replaceChildren();
       modal.dataset.restoreBackupId = String(backupId || '');
-      modal.dataset.restoreWorkspaceId = String(state.currentWorkspace || '');
+      modal.dataset.restoreWorkspaceId = String(workspaceId || '');
 
       const backdrop = document.createElement('div');
       backdrop.className = 'modal-backdrop';
@@ -4121,6 +4122,7 @@
       actions.style.display = 'flex';
       actions.style.gap = '0.75rem';
       actions.style.justifyContent = 'flex-end';
+      actions.style.flexWrap = 'wrap';
 
       const cancel = document.createElement('button');
       cancel.className = 'btn btn-secondary';
@@ -4133,7 +4135,14 @@
       apply.textContent = 'Verify & Restore';
       apply.onclick = submitRestoreBackup;
 
-      actions.append(cancel, apply);
+      const restart = document.createElement('button');
+      restart.id = 'restoreNewAttemptButton'; restart.className = 'btn btn-secondary hidden';
+      restart.textContent = 'Start a new restore after review';
+      restart.onclick = () => {
+        sessionStorage.removeItem('flink_restore_intent_' + JSON.stringify([state.user.userId, workspaceId, backupId]));
+        openRestoreWizard(backupId, workspaceId);
+      };
+      actions.append(cancel, restart, apply);
       box.append(title, intro, idLine, passwordLabel, password, warning, actions);
       backdrop.appendChild(box);
       modal.appendChild(backdrop);
@@ -4144,6 +4153,7 @@
       const backupId = modal.dataset.restoreBackupId || '';
       const workspaceId = modal.dataset.restoreWorkspaceId || '';
       const applyButton = document.getElementById('restoreApplyButton');
+      const restartButton = document.getElementById('restoreNewAttemptButton');
       if (!applyButton || applyButton.disabled) return;
       const adminPassword = document.getElementById('restoreAdminPassword')?.value || '';
       if (!backupId || !workspaceId) {
@@ -4152,21 +4162,33 @@
 
       applyButton.disabled = true;
       try {
+        const pendingKey = 'flink_restore_intent_' + JSON.stringify([state.user.userId, workspaceId, backupId]);
+        const storedIntent = sessionStorage.getItem(pendingKey);
+        let intent = storedIntent ? JSON.parse(storedIntent) : null;
+        if (!intent) {
+          const latest = await apiCall('backups.restoreStatus', { workspaceId });
+          intent = { intentId: crypto.randomUUID(), previousOperationId: latest.operationId || '' };
+          sessionStorage.setItem(pendingKey, JSON.stringify(intent));
+        }
         await apiCall('backups.restoreValidate', {
           workspaceId,
           backupId
         });
+        const prepared = await apiCall('backups.restorePrepare', { workspaceId, backupId, ...intent });
         const result = await apiCall('backups.restoreApply', {
           workspaceId,
           backupId,
-          adminPassword
+          adminPassword,
+          operationId: prepared.operationId
         });
 
+        if (result.receiptRecorded !== false) sessionStorage.removeItem(pendingKey);
         closeModal();
         alert(
-          'Restore completed successfully. Safety backup: ' +
+          (result.replayed ? 'Previous restore receipt recovered. No restore was repeated. Safety backup: ' : 'Restore completed successfully. Safety backup: ') +
           String(result.safetyBackupId || 'created') +
-          (result.auditRecorded === false ? '\nCompletion audit logging failed. Ask the owner to record and review this restore.' : '')
+          (result.auditRecorded === false ? '\nCompletion audit logging failed. Ask the owner to record and review this restore.' : '') +
+          (result.receiptRecorded === false ? '\nRestore receipt could not be confirmed. Keep recovery files and ask the owner to review before another restore.' : '')
         );
         await renderSaBackups();
       } catch (e) {
@@ -4177,6 +4199,7 @@
         alert((e.message || 'Restore outcome could not be confirmed. Inspect the Master workspace pointer before retrying.') + recoveryFiles);
         // An uncertain response must not invite another restore from this dialog.
         applyButton.textContent = 'Close and review recovery state';
+        if (restartButton && recovery && ['NOT_SWITCHED', 'ROLLED_BACK_VERIFIED'].includes(recovery.recoveryStatus)) restartButton.classList.remove('hidden');
       }
     }
 

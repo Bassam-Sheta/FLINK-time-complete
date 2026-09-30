@@ -415,7 +415,70 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
     return MasterRepository.getWorkspace(workspaceId);
   },
 
-  restoreBackup(superAdminContext, workspaceId, backupId, adminPassword) {
+  _restoreOperationKey(workspaceId) { return 'FLINK_RESTORE_WORKSPACE_' + workspaceId; },
+  _getRestoreOperation(workspaceId) {
+    const raw = PropertiesService.getScriptProperties().getProperty(this._restoreOperationKey(workspaceId));
+    if (!raw) return null;
+    try {
+      const record = JSON.parse(raw);
+      if (record.workspaceId !== workspaceId || typeof record.operationId !== 'string' ||
+          typeof record.intentId !== 'string' || typeof record.ownerId !== 'string' ||
+          !['PREPARED', 'RUNNING', 'COMPLETED', 'FAILED', 'RECONCILIATION_REQUIRED'].includes(record.status) ||
+          (record.status === 'PREPARED' && !Number.isFinite(Number(record.expiresAtMs))) ||
+          (record.status === 'COMPLETED' && (!record.result || record.result.ok !== true ||
+            record.result.workspaceId !== workspaceId || record.result.backupId !== record.backupId ||
+            typeof record.result.restoredSpreadsheetId !== 'string'))) throw Error('Invalid record');
+      return record;
+    } catch (error) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Restore operation record needs owner review. It will not be reset automatically.', 409);
+    }
+  },
+  _saveRestoreOperation(record) {
+    // Reuse storage admission under the already-held ScriptLock. One bounded
+    // record per workspace; superseded operation IDs are always rejected.
+    AuthService._writeSecurityProperty(this._restoreOperationKey(record.workspaceId), JSON.stringify(record));
+  },
+  restoreStatus(context, workspaceId) {
+    AuthorizationService.assertRole(context, [CONSTANTS.ROLES.SUPER_ADMIN]);
+    const record = this._getRestoreOperation(workspaceId);
+    return record ? { operationId: record.operationId, status: record.status, stage: record.stage } : { operationId: '', status: 'NONE' };
+  },
+  prepareRestore(context, workspaceId, backupId, intentId, previousOperationId) {
+    AuthorizationService.assertRole(context, [CONSTANTS.ROLES.SUPER_ADMIN]);
+    if (typeof intentId !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(intentId) || !workspaceId || !backupId ||
+        typeof previousOperationId !== 'string' || previousOperationId.length > 100) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Workspace, backup and bounded restore intent IDs are required.', 400);
+    }
+    const lock = LockService.getScriptLock(); lock.waitLock(30000);
+    try {
+      const previous = this._getRestoreOperation(workspaceId);
+      if (previous && previous.intentId === intentId) {
+        if (previous.ownerId !== context.userId || previous.backupId !== backupId) throw new AppError(ERROR_CODES.CONFLICT, 'Restore intent belongs to a different request.', 409);
+        // PREPARED has performed no restore side effects. Renewing an expired
+        // preparation retires its old operation ID without repeating a restore.
+        if (previous.status === 'PREPARED' && Date.now() >= Number(previous.expiresAtMs)) {
+          previous.operationId = Validation.generateId('RST'); previous.expiresAtMs = Date.now() + 10 * 60000;
+          this._saveRestoreOperation(previous);
+        }
+        return { operationId: previous.operationId, status: previous.status };
+      }
+      if (previousOperationId !== (previous ? previous.operationId : '')) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Restore operation changed. Review the latest state before starting a new intent.', 409);
+      }
+      if (previous && (previous.status === 'RUNNING' || previous.status === 'RECONCILIATION_REQUIRED' ||
+          (previous.status === 'PREPARED' && Date.now() < Number(previous.expiresAtMs)))) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'A prior restore needs owner reconciliation before another can be prepared.', 409, previous.recovery || null);
+      }
+      const ws = this._readRestoreWorkspace(workspaceId);
+      if (!ws || ws.Status !== CONSTANTS.WORKSPACE_STATUS.ACTIVE) throw new AppError(ERROR_CODES.CONFLICT, 'Restore requires an ACTIVE workspace.', 409);
+      const record = { workspaceId, backupId, intentId, ownerId: context.userId, operationId: Validation.generateId('RST'),
+        status: 'PREPARED', stage: 'PREPARED', createdAt: new Date().toISOString(), expiresAtMs: Date.now() + 10 * 60000 };
+      this._saveRestoreOperation(record);
+      return { operationId: record.operationId, status: record.status };
+    } finally { lock.releaseLock(); }
+  },
+
+  restoreBackup(superAdminContext, workspaceId, backupId, adminPassword, operationId) {
     AuthorizationService.assertRole(superAdminContext, [CONSTANTS.ROLES.SUPER_ADMIN]);
     if (!workspaceId || !backupId || (CONSTANTS.AUTH_MODE !== 'GOOGLE' && !adminPassword)) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'workspaceId, backupId, and Super Admin password are required for restore.', 400);
@@ -445,8 +508,16 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
     let candidateFileId = '';
     let workspaceMutationAttempted = false;
     let safetyBackupId = '';
+    let operation = null, operationStarted = false, sideEffectsAttempted = false;
 
     try {
+      operation = this._getRestoreOperation(workspaceId);
+      if (!operation || operation.operationId !== operationId || operation.backupId !== backupId || operation.ownerId !== superAdminContext.userId) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Prepare this restore before applying it. Unknown or superseded operations cannot execute.', 409);
+      }
+      if (operation.status === 'COMPLETED' && operation.result) return { ...operation.result, replayed: true };
+      if (operation.status !== 'PREPARED') throw new AppError(ERROR_CODES.CONFLICT, 'This restore already ran or requires owner reconciliation. It will not execute again.', 409, operation.recovery || null);
+      if (!Number.isFinite(Number(operation.expiresAtMs)) || Date.now() >= Number(operation.expiresAtMs)) throw new AppError(ERROR_CODES.CONFLICT, 'Prepared restore expired. Start a new explicit restore intent.', 409);
       const ws = MasterRepository.getWorkspace(workspaceId);
       if (!ws) throw new AppError(ERROR_CODES.NOT_FOUND, `Workspace ${workspaceId} not found.`, 404);
       if (ws.Status !== CONSTANTS.WORKSPACE_STATUS.ACTIVE) {
@@ -458,13 +529,21 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
       const record = this._getRegistryRecord(backupId);
 
       // Safety snapshot of the currently live workspace before any pointer change.
+      operationStarted = true;
+      operation.status = 'RUNNING'; operation.stage = 'CREATING_SAFETY_BACKUP'; operation.previousSpreadsheetId = previousSpreadsheetId;
+      this._saveRestoreOperation(operation);
+      sideEffectsAttempted = true;
       const safetyBackup = this._createBackupUnlocked(superAdminContext, workspaceId);
       safetyBackupId = safetyBackup.backupId;
 
+      operation.safetyBackupId = safetyBackupId; operation.stage = 'CREATING_CANDIDATE';
+      this._saveRestoreOperation(operation);
       const backupFile = DriveApp.getFileById(record.BackupFileID);
       const candidateName = `RESTORE_${workspaceId}_${new Date().toISOString().replace(/[:.]/g, '-')}`;
       const candidateFile = backupFile.makeCopy(candidateName);
       candidateFileId = candidateFile.getId();
+      operation.candidateFileId = candidateFileId; operation.stage = 'CHECKING_CANDIDATE';
+      this._saveRestoreOperation(operation);
 
       const candidateSpreadsheet = this._openBackupSpreadsheet(candidateFileId);
       const candidateManifest = this._buildManifest(candidateSpreadsheet, 'WORKSPACE', workspaceId);
@@ -478,6 +557,7 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
 
       // Quiesce all normal workspace operations before changing the live pointer.
       // Set this before the call: Google may commit a write whose response is lost.
+      operation.stage = 'SWITCHING_WORKSPACE'; this._saveRestoreOperation(operation);
       workspaceMutationAttempted = true;
       MasterRepository.updateWorkspace(workspaceId, {
         Status: CONSTANTS.WORKSPACE_STATUS.MAINTENANCE,
@@ -540,6 +620,7 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
             spreadsheetId: candidateFileId,
             restoredBackupId: backupId,
             safetyBackupId: safetyBackup.backupId,
+            operationId: operation.operationId,
             candidateRollupValidation
           },
           Reason: 'Verified registered workspace restore applied through isolated working copy'
@@ -548,7 +629,7 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
         console.error('Restore committed, but completion audit logging failed.');
       }
 
-      return {
+      const result = {
         ok: true,
         workspaceId,
         backupId,
@@ -557,9 +638,19 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
         restoredSpreadsheetId: candidateFileId,
         status: CONSTANTS.WORKSPACE_STATUS.ACTIVE,
         auditRecorded,
+        receiptRecorded: true,
+        completedAt: new Date().toISOString(),
         message: `Workspace ${workspaceId} restored from verified backup ${backupId}.`
       };
+      operation.status = 'COMPLETED'; operation.stage = 'COMPLETED'; operation.result = result;
+      try { this._saveRestoreOperation(operation); }
+      catch (receiptError) {
+        result.receiptRecorded = false;
+        console.error('Restore committed; operation receipt requires owner verification.');
+      }
+      return result;
     } catch (err) {
+      if (!operationStarted) throw err;
       let rollbackVerified = false;
       if (workspaceMutationAttempted && previousSpreadsheetId) {
         try {
@@ -599,9 +690,12 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
       // Preserve the original, candidate and safety snapshot. In an uncertain
       // rollback the candidate may still be live; automated trashing is unsafe.
       const recovery = {
-        recoveryStatus: !workspaceMutationAttempted ? 'NOT_SWITCHED' : rollbackVerified ? 'ROLLED_BACK_VERIFIED' : 'RECONCILIATION_REQUIRED',
-        workspaceId, backupId, previousSpreadsheetId, candidateFileId, safetyBackupId
+        recoveryStatus: rollbackVerified ? 'ROLLED_BACK_VERIFIED' : sideEffectsAttempted ? 'RECONCILIATION_REQUIRED' : 'NOT_SWITCHED',
+        workspaceId, backupId, previousSpreadsheetId, candidateFileId, safetyBackupId, operationId: operation.operationId
       };
+      operation.status = recovery.recoveryStatus === 'RECONCILIATION_REQUIRED' ? 'RECONCILIATION_REQUIRED' : 'FAILED';
+      operation.stage = operation.status; operation.recovery = recovery;
+      try { this._saveRestoreOperation(operation); } catch (receiptError) { console.error('Restore recovery record requires owner verification.'); }
       try {
         MasterRepository.logGlobalAudit({
           ActorUserID: superAdminContext.userId,
@@ -616,7 +710,7 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
         });
       } catch (auditErr) {}
 
-      if (workspaceMutationAttempted) {
+      if (workspaceMutationAttempted || sideEffectsAttempted) {
         throw new AppError(ERROR_CODES.CONFLICT,
           rollbackVerified
             ? 'Restore failed. The original workspace pointer was read back as ACTIVE. All recovery files were preserved.'
