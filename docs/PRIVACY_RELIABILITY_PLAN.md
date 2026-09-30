@@ -19,7 +19,21 @@ Google primary identity and mandatory app TOTP MFA remain the authentication mod
 
 The privacy review workflow records human decisions. It does not automatically export all personal data, erase data, enforce a legal hold, notify a requester, send email, verify an evidence link or certify a control. Closing a request is an operator attestation that the applicable work and response have been performed through approved channels. Audit-write failure after a saved record remains visible to the operator.
 
-## Validation observed in this turn
+## Restore recovery review — 2026-09-30 continuation
+
+The subsequent source review found a **high availability risk** in `BackupService.restoreBackup`: after a failed rollback, the catch block could trash the candidate Sheet even when its ID remained the live workspace pointer. A completion-audit failure also entered that catch block after the candidate had been activated. This contradicts treating earlier local test passes as sufficient restore coverage; the earlier suite did not execute these fault cases.
+
+The patch now preserves the original, candidate and safety snapshot on every failure. It marks workspace mutation as attempted before the first write, so a committed write with a lost response still enters recovery. Activation and rollback require a fresh workspace read after flush and cache invalidation. Unconfirmed recovery attempts MAINTENANCE and returns `RECONCILIATION_REQUIRED` with recovery IDs; confirmed rollback returns `ROLLED_BACK_VERIFIED`. A completion-audit outage after confirmed activation returns `auditRecorded: false` and leaves the candidate active. The portal shows the warning and recovery IDs, disables duplicate/retry submissions, and captures the workspace when opening the dialog.
+
+**Local evidence in this continuation:** Windows/Node 24.16.0, 306 Node tests passed with zero failures. Nine new tests execute the restore source with fault-injected service adapters: audit exceptions/false results, quiesce/pointer/activation response loss, failed or ignored rollback writes, unavailable readback, invalid candidate and ordinary completion. All nine failed against the previous behavior and passed after the patch. Two new Chromium workflows passed for duplicate submission/workspace capture/audit warning and uncertain recovery IDs/disabled retry. These checks do not prove Google persistence, Drive sharing or target-environment recovery.
+
+**Owner reconciliation:** do not retry an uncertain restore or trash any recovery file. Inspect the actual Master workspace row, original Sheet, candidate Sheet, registered backup and safety snapshot. Confirm sharing, content integrity, timers, rollups and session revocation before choosing the live pointer and reopening ACTIVE. Record the decision through the protected owner procedure. If Google cannot accept or confirm the MAINTENANCE write, quarantine is unverified and requires immediate owner review. No automatic reconciliation, orphan cleanup or durable restore-operation receipt is claimed.
+
+**Additional live gate:** inject response loss after quiesce, pointer switch, activation and rollback; deny pointer readback and MAINTENANCE writes; fail completion audit separately. Verify preserved files and the physical live pointer directly in Google. Verify ordinary app requests are denied during MAINTENANCE. Test browser/network response loss and establish an operator reconciliation procedure before release.
+
+**Performance scope:** fresh state reads are added to the protected restore operation; normal timer/report paths are unchanged by this continuation. Computed compressed HTML is now 42,678 / 41,746 / 41,725 bytes for User / Admin / SuperAdmin (345 bytes more per portal than the previous continuation). No Google latency benchmark or overall speedup has been established.
+
+## Previous continuation validation (historical)
 
 - Windows, Node 24.16.0, Python 3.14 and Chromium 153 through Playwright 1.63.0.
 - `npm test`: 297 passed, zero failed, including generated-source checks, cryptographic source integrity, authorization/session/MFA, timers, timesheets, reports, request workflows, installer recovery and privacy operations. Google services are represented by adapters.

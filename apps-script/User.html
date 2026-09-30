@@ -4185,6 +4185,7 @@
       const modal = document.getElementById('modalContainer');
       modal.replaceChildren();
       modal.dataset.restoreBackupId = String(backupId || '');
+      modal.dataset.restoreWorkspaceId = String(state.currentWorkspace || '');
 
       const backdrop = document.createElement('div');
       backdrop.className = 'modal-backdrop';
@@ -4201,12 +4202,12 @@
       intro.style.fontSize = '0.85rem';
       intro.style.marginBottom = '1.25rem';
       intro.textContent =
-        'The selected registered backup will be re-verified, copied to an isolated restore candidate, active timers cleared, sessions revoked, rollups reconciled, and the workspace pointer changed only if all stages succeed.';
+        'The selected backup is checked before activation. Restore clears active timers and revokes workspace sessions. Recovery files are preserved if a stage fails; uncertain outcomes require owner review before another restore.';
 
       const idLine = document.createElement('div');
       idLine.style.marginBottom = '1rem';
       idLine.style.fontFamily = 'var(--font-mono)';
-      idLine.textContent = 'Backup ID: ' + String(backupId || '');
+      idLine.textContent = 'Workspace: ' + modal.dataset.restoreWorkspaceId + ' · Backup ID: ' + String(backupId || '');
 
       const passwordLabel = document.createElement('label');
       passwordLabel.textContent = 'Restore requires Google identity and fresh MFA verification.';
@@ -4234,6 +4235,7 @@
 
       const apply = document.createElement('button');
       apply.className = 'btn btn-warning';
+      apply.id = 'restoreApplyButton';
       apply.textContent = 'Verify & Restore';
       apply.onclick = submitRestoreBackup;
 
@@ -4246,18 +4248,22 @@
     async function submitRestoreBackup() {
       const modal = document.getElementById('modalContainer');
       const backupId = modal.dataset.restoreBackupId || '';
+      const workspaceId = modal.dataset.restoreWorkspaceId || '';
+      const applyButton = document.getElementById('restoreApplyButton');
+      if (!applyButton || applyButton.disabled) return;
       const adminPassword = document.getElementById('restoreAdminPassword')?.value || '';
-      if (!backupId) {
-        return alert('Backup ID is required.');
+      if (!backupId || !workspaceId) {
+        return alert('Backup and workspace IDs are required.');
       }
 
+      applyButton.disabled = true;
       try {
         await apiCall('backups.restoreValidate', {
-          workspaceId: state.currentWorkspace,
+          workspaceId,
           backupId
         });
         const result = await apiCall('backups.restoreApply', {
-          workspaceId: state.currentWorkspace,
+          workspaceId,
           backupId,
           adminPassword
         });
@@ -4265,11 +4271,18 @@
         closeModal();
         alert(
           'Restore completed successfully. Safety backup: ' +
-          String(result.safetyBackupId || 'created')
+          String(result.safetyBackupId || 'created') +
+          (result.auditRecorded === false ? '\nCompletion audit logging failed. Ask the owner to record and review this restore.' : '')
         );
         await renderSaBackups();
       } catch (e) {
-        alert(e.message || 'Restore failed. The live workspace pointer was not changed or was rolled back.');
+        const recovery = e.details;
+        const recoveryFiles = recovery ? '\nRecovery status: ' + recovery.recoveryStatus +
+          '\nOriginal Sheet: ' + recovery.previousSpreadsheetId + '\nCandidate Sheet: ' + recovery.candidateFileId +
+          '\nSafety backup: ' + recovery.safetyBackupId : '';
+        alert((e.message || 'Restore outcome could not be confirmed. Inspect the Master workspace pointer before retrying.') + recoveryFiles);
+        // An uncertain response must not invite another restore from this dialog.
+        applyButton.textContent = 'Close and review recovery state';
       }
     }
 

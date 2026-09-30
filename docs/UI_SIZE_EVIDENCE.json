@@ -1,36 +1,36 @@
 {
   "baseline": "59e7467cdfcd673e4ad24e75b7a982a194442448",
-  "measuredAt": "2026-09-30T19:11:36.897Z",
+  "measuredAt": "2026-09-30T19:48:48.264Z",
   "environment": "v24.16.0",
   "rows": [
     {
       "portal": "User",
       "baselineBytes": 184092,
-      "currentBytes": 203431,
+      "currentBytes": 204453,
       "baselineGzipBytes": 37056,
-      "currentGzipBytes": 42333,
+      "currentGzipBytes": 42678,
       "baselineInlineJsBytes": 152813,
-      "currentInlineJsBytes": 167573,
+      "currentInlineJsBytes": 168595,
       "externalFontLinks": 0
     },
     {
       "portal": "Admin",
       "baselineBytes": 179314,
-      "currentBytes": 198653,
+      "currentBytes": 199675,
       "baselineGzipBytes": 36026,
-      "currentGzipBytes": 41401,
+      "currentGzipBytes": 41746,
       "baselineInlineJsBytes": 148430,
-      "currentInlineJsBytes": 163190,
+      "currentInlineJsBytes": 164212,
       "externalFontLinks": 0
     },
     {
       "portal": "SuperAdmin",
       "baselineBytes": 179710,
-      "currentBytes": 199353,
+      "currentBytes": 200375,
       "baselineGzipBytes": 35921,
-      "currentGzipBytes": 41380,
+      "currentGzipBytes": 41725,
       "baselineInlineJsBytes": 148671,
-      "currentInlineJsBytes": 163431,
+      "currentInlineJsBytes": 164453,
       "externalFontLinks": 0
     }
   ]

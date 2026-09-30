@@ -13834,6 +13834,13 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
    * Restores a registered workspace backup through a new working copy.
    * The immutable backup file itself never becomes the live workspace.
    */
+  _readRestoreWorkspace(workspaceId) {
+    if (typeof SpreadsheetApp !== 'undefined' && SpreadsheetApp.flush) SpreadsheetApp.flush();
+    if (MasterRepository.beginRequest) MasterRepository.beginRequest();
+    if (typeof WorkspaceRouter !== 'undefined' && WorkspaceRouter.clearCache) WorkspaceRouter.clearCache();
+    return MasterRepository.getWorkspace(workspaceId);
+  },
+
   restoreBackup(superAdminContext, workspaceId, backupId, adminPassword) {
     AuthorizationService.assertRole(superAdminContext, [CONSTANTS.ROLES.SUPER_ADMIN]);
     if (!workspaceId || !backupId || (CONSTANTS.AUTH_MODE !== 'GOOGLE' && !adminPassword)) {
@@ -13862,7 +13869,8 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
 
     let previousSpreadsheetId = '';
     let candidateFileId = '';
-    let workspaceWasQuiesced = false;
+    let workspaceMutationAttempted = false;
+    let safetyBackupId = '';
 
     try {
       const ws = MasterRepository.getWorkspace(workspaceId);
@@ -13877,6 +13885,7 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
 
       // Safety snapshot of the currently live workspace before any pointer change.
       const safetyBackup = this._createBackupUnlocked(superAdminContext, workspaceId);
+      safetyBackupId = safetyBackup.backupId;
 
       const backupFile = DriveApp.getFileById(record.BackupFileID);
       const candidateName = `RESTORE_${workspaceId}_${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -13894,11 +13903,12 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
       const candidateRollupValidation = this._validateWorkspaceRollupTotals(candidateSpreadsheet);
 
       // Quiesce all normal workspace operations before changing the live pointer.
+      // Set this before the call: Google may commit a write whose response is lost.
+      workspaceMutationAttempted = true;
       MasterRepository.updateWorkspace(workspaceId, {
         Status: CONSTANTS.WORKSPACE_STATUS.MAINTENANCE,
         UpdatedAt: new Date().toISOString()
       });
-      workspaceWasQuiesced = true;
 
       // Clear stale active timers directly on the candidate while it is still offline.
       const timersSheet = candidateSpreadsheet.getSheetByName(CONSTANTS.WORKSPACE_TABS.ACTIVE_TIMERS);
@@ -13936,22 +13946,33 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
         WorkspaceRouter.clearCache();
       }
 
-      MasterRepository.logGlobalAudit({
-        ActorUserID: superAdminContext.userId,
-        ActorRole: superAdminContext.role,
-        WorkspaceID: workspaceId,
-        EntityType: 'WORKSPACE',
-        EntityID: workspaceId,
-        Action: 'RESTORE_COMPLETED',
-        BeforeJSON: { spreadsheetId: previousSpreadsheetId },
-        AfterJSON: {
-          spreadsheetId: candidateFileId,
-          restoredBackupId: backupId,
-          safetyBackupId: safetyBackup.backupId,
-          candidateRollupValidation
-        },
-        Reason: 'Verified registered workspace restore applied through isolated working copy'
-      });
+      const committed = this._readRestoreWorkspace(workspaceId);
+      if (!committed || committed.SpreadsheetID !== candidateFileId || committed.Status !== CONSTANTS.WORKSPACE_STATUS.ACTIVE) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Restore activation could not be confirmed.', 409);
+      }
+
+      // Once activation is confirmed, an audit outage must not undo the restore.
+      let auditRecorded = false;
+      try {
+        auditRecorded = MasterRepository.logGlobalAudit({
+          ActorUserID: superAdminContext.userId,
+          ActorRole: superAdminContext.role,
+          WorkspaceID: workspaceId,
+          EntityType: 'WORKSPACE',
+          EntityID: workspaceId,
+          Action: 'RESTORE_COMPLETED',
+          BeforeJSON: { spreadsheetId: previousSpreadsheetId },
+          AfterJSON: {
+            spreadsheetId: candidateFileId,
+            restoredBackupId: backupId,
+            safetyBackupId: safetyBackup.backupId,
+            candidateRollupValidation
+          },
+          Reason: 'Verified registered workspace restore applied through isolated working copy'
+        }) === true;
+      } catch (auditErr) {
+        console.error('Restore committed, but completion audit logging failed.');
+      }
 
       return {
         ok: true,
@@ -13961,10 +13982,12 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
         previousSpreadsheetId,
         restoredSpreadsheetId: candidateFileId,
         status: CONSTANTS.WORKSPACE_STATUS.ACTIVE,
+        auditRecorded,
         message: `Workspace ${workspaceId} restored from verified backup ${backupId}.`
       };
     } catch (err) {
-      if (workspaceWasQuiesced && previousSpreadsheetId) {
+      let rollbackVerified = false;
+      if (workspaceMutationAttempted && previousSpreadsheetId) {
         try {
           MasterRepository.updateWorkspace(workspaceId, {
             SpreadsheetID: previousSpreadsheetId,
@@ -13975,14 +13998,36 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
             WorkspaceRouter.clearCache();
           }
         } catch (rollbackErr) {
-          console.error('Restore rollback failed: ' + rollbackErr.message);
+          console.error('Restore rollback write was not acknowledged. Reading the current pointer.');
+        }
+
+        // A response is not proof of persistence, and a lost response is not proof
+        // of failure. Confirm the actual pointer after clearing request caches.
+        try {
+          const current = this._readRestoreWorkspace(workspaceId);
+          rollbackVerified = !!current && current.SpreadsheetID === previousSpreadsheetId && current.Status === CONSTANTS.WORKSPACE_STATUS.ACTIVE;
+        } catch (readErr) {
+          console.error('Restore recovery state could not be read.');
+        }
+        if (!rollbackVerified) {
+          try {
+            MasterRepository.updateWorkspace(workspaceId, {
+              Status: CONSTANTS.WORKSPACE_STATUS.MAINTENANCE,
+              UpdatedAt: new Date().toISOString()
+            });
+            this._readRestoreWorkspace(workspaceId);
+          } catch (maintenanceErr) {
+            console.error('Restore maintenance state requires owner verification.');
+          }
         }
       }
 
-      if (candidateFileId) {
-        try { DriveApp.getFileById(candidateFileId).setTrashed(true); } catch (trashErr) {}
-      }
-
+      // Preserve the original, candidate and safety snapshot. In an uncertain
+      // rollback the candidate may still be live; automated trashing is unsafe.
+      const recovery = {
+        recoveryStatus: !workspaceMutationAttempted ? 'NOT_SWITCHED' : rollbackVerified ? 'ROLLED_BACK_VERIFIED' : 'RECONCILIATION_REQUIRED',
+        workspaceId, backupId, previousSpreadsheetId, candidateFileId, safetyBackupId
+      };
       try {
         MasterRepository.logGlobalAudit({
           ActorUserID: superAdminContext.userId,
@@ -13992,13 +14037,20 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
           EntityID: workspaceId,
           Action: 'RESTORE_FAILED',
           BeforeJSON: { spreadsheetId: previousSpreadsheetId },
-          AfterJSON: { backupId, candidateFileId },
+          AfterJSON: recovery,
           Reason: err && err.message ? err.message : 'Restore failed'
         });
       } catch (auditErr) {}
 
+      if (workspaceMutationAttempted) {
+        throw new AppError(ERROR_CODES.CONFLICT,
+          rollbackVerified
+            ? 'Restore failed. The original workspace pointer was read back as ACTIVE. All recovery files were preserved.'
+            : 'Restore outcome requires owner reconciliation. Do not retry or delete recovery files. Inspect the Master workspace pointer and maintenance status.',
+          409, recovery);
+      }
       if (err instanceof AppError) throw err;
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Restore failed and was rolled back: ' + err.message, 500);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Restore preparation failed before a workspace change was attempted. Recovery files were preserved.', 500);
     } finally {
       if (scriptLock) {
         try { scriptLock.releaseLock(); } catch (e) {}
