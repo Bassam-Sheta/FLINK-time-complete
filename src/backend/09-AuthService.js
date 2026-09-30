@@ -14,6 +14,34 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
 
   _googleMode() { return CONSTANTS.AUTH_MODE === 'GOOGLE'; },
 
+  _writeSecurityProperty(key, serialized) {
+    const bytes = value => unescape(encodeURIComponent(String(value))).length;
+    if (bytes(serialized) > 8000) throw new AppError(ERROR_CODES.SERVER_BUSY, 'Security state exceeds its safe size limit.', 503);
+    return this._withLoginStateLock(() => {
+      const props = PropertiesService.getScriptProperties();
+      // All real Apps Script stores expose getProperties. Minimal local adapters
+      // may omit it; quota admission is exercised separately with a full adapter.
+      if (typeof props.getProperties === 'function') {
+        const all = props.getProperties(); let size = 0;
+        for (const [name, value] of Object.entries(all)) size += bytes(name) + bytes(value);
+        if (size > 350000) {
+          for (const [name, value] of Object.entries(all)) {
+            if (!/^FLINK_(?:MFA_SESSION|MFA_CHALLENGE|MFA_ENROLLMENT|STEP_UP|REAUTH)_/.test(name)) continue;
+            let expires = NaN; try { expires = Number(JSON.parse(value).expiresAtMs); } catch (e) {}
+            if (!Number.isFinite(expires) || expires <= Date.now()) {
+              props.deleteProperty(name); size -= bytes(name) + bytes(value); delete all[name];
+            }
+          }
+        }
+        const replaced = Object.hasOwn(all, key) ? bytes(key) + bytes(all[key]) : 0;
+        if (size - replaced + bytes(key) + bytes(serialized) > 400000) {
+          throw new AppError(ERROR_CODES.SERVER_BUSY, 'Security state is near capacity. Ask the owner to run housekeeping before signing in again.', 503);
+        }
+      }
+      props.setProperty(key, serialized);
+    });
+  },
+
   _verifyPrimaryIdentity(context, password, credentials) {
     if (!credentials) return false;
     if (!this._googleMode()) return SecurityService.verifyPassword(password, credentials.PasswordHash);
@@ -25,7 +53,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
     if (!this._googleMode()) return;
     const key = 'FLINK_MFA_SESSION_' + session.sessionId;
     const record = JSON.stringify({ userId, expiresAtMs: Date.now() + CONSTANTS.LIMITS.SESSION_ABSOLUTE_TIMEOUT_HOURS * 3600000 });
-    if (typeof PropertiesService !== 'undefined') PropertiesService.getScriptProperties().setProperty(key, record);
+    if (typeof PropertiesService !== 'undefined') this._writeSecurityProperty(key, record);
     else this._mfaSessionMemory[key] = record;
   },
 
@@ -117,7 +145,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
     }
     record.attempts += 1;
     const serialized = JSON.stringify(record);
-    if (props) props.setProperty(key, serialized);
+    if (props) this._writeSecurityProperty(key, serialized);
     else this._reauthMemory[key] = serialized;
   },
 
@@ -133,9 +161,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
     });
 
     if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
-      PropertiesService
-        .getScriptProperties()
-        .setProperty(this._mfaChallengePropertyKey(userId), record);
+      this._writeSecurityProperty(this._mfaChallengePropertyKey(userId), record);
       return;
     }
 
@@ -178,7 +204,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
   _storeMfaEnrollment(userId, record) {
     const serialized = JSON.stringify(record || {});
     if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
-      PropertiesService.getScriptProperties().setProperty(
+      this._writeSecurityProperty(
         this._mfaEnrollmentPropertyKey(userId),
         serialized
       );
@@ -217,7 +243,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
   _storeStepUp(sessionId, record) {
     const serialized = JSON.stringify(record || {});
     if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
-      PropertiesService.getScriptProperties().setProperty(this._stepUpPropertyKey(sessionId), serialized);
+      this._writeSecurityProperty(this._stepUpPropertyKey(sessionId), serialized);
     } else {
       this._stepUpMemory[sessionId] = serialized;
     }

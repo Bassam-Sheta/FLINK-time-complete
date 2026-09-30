@@ -218,6 +218,14 @@ function doPost(e) {
  * role authorizations, workspace binding, and mutation requirements.
  */
 const ACTION_PERMISSIONS = {
+  'privacy.notice': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: false },
+  'privacy.requests.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: false },
+  'privacy.requests.submit': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: true },
+  'privacy.initialize': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'privacy.notice.save': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'privacy.requests.review': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'assurance.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
+  'assurance.save': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
   // Public / Unauthenticated
   'auth.login': { authRequired: false, isWrite: true },
   'auth.verifyMfa': { authRequired: false, isWrite: true },
@@ -315,6 +323,8 @@ const ACTION_PERMISSIONS = {
   'backups.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'backups.restoreValidate': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'backups.restoreApply': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'backups.restorePrepare': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'backups.restoreStatus': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'rollups.rebuild': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN], requiresWorkspace: true, isWrite: true },
 
   // Jobs & Capacity
@@ -328,6 +338,7 @@ const ACTION_PERMISSIONS = {
 };
 
 const PRIVILEGED_STEP_UP_ACTIONS = new Set([
+  'privacy.initialize', 'privacy.notice.save', 'privacy.requests.review', 'assurance.save',
   'workspaces.create',
   'workspaces.assignAdmin',
   'workspaces.removeAdmin',
@@ -348,6 +359,7 @@ const PRIVILEGED_STEP_UP_ACTIONS = new Set([
   'sessions.revoke',
   'backups.create',
   'backups.restoreApply',
+  'backups.restorePrepare',
   'jobs.dispatchHousekeeping',
   'jobs.dispatchRollups',
   'integrity.audit'
@@ -537,10 +549,21 @@ function dispatchAction_(action, data) {
     PRIVILEGED_STEP_UP_ACTIONS.has(action)
   ) {
     AuthService.assertStepUp(authContext, payload.stepUpToken || '');
-    AuditService.requirePrivilegedActionAudit(authContext, action, wsId || '');
+    // Backup routes take their target from the payload before the page's
+    // workspace header. Audit the same target when the page selection changes.
+    const auditWorkspaceId = action.startsWith('backups.') ? payload.workspaceId || wsId : wsId;
+    AuditService.requirePrivilegedActionAudit(authContext, action, auditWorkspaceId || '');
   }
 
   switch (action) {
+    case 'privacy.notice': return PrivacyService.getNotice();
+    case 'privacy.requests.list': return PrivacyService.list(authContext, payload);
+    case 'privacy.requests.submit': return PrivacyService.submit(authContext, payload);
+    case 'privacy.initialize': return PrivacyService.initialize(authContext);
+    case 'privacy.notice.save': return PrivacyService.saveNotice(authContext, payload);
+    case 'privacy.requests.review': return PrivacyService.review(authContext, payload);
+    case 'assurance.list': return PrivacyService.assurance(authContext);
+    case 'assurance.save': return PrivacyService.saveEvidence(authContext, payload);
     case 'auth.validateSession':
       return { user: authContext.user, role: authContext.role, mfaEnrollmentRequired: needsMfaEnrollment };
 
@@ -859,8 +882,15 @@ function dispatchAction_(action, data) {
         authContext,
         payload.workspaceId || wsId,
         payload.backupId,
-        payload.adminPassword
+        payload.adminPassword,
+        payload.operationId
       );
+
+    case 'backups.restorePrepare':
+      return BackupService.prepareRestore(authContext, payload.workspaceId || wsId, payload.backupId, payload.intentId, payload.previousOperationId);
+
+    case 'backups.restoreStatus':
+      return BackupService.restoreStatus(authContext, payload.workspaceId || wsId);
 
     case 'rollups.rebuild':
       return RollupService.rebuildRollups(wsId);

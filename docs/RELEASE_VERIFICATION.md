@@ -2,6 +2,8 @@
 
 ## Scope and evidence
 
+Latest source update: see [Privacy, reliability and interface review](PRIVACY_RELIABILITY_PLAN.md) for the 2026-09-30 follow-up changes, local checks, measured size costs and remaining live/compliance work. Earlier observations below describe the earlier runtime; they are not verification of this new patch or a live Google deployment.
+
 This edition derives from `Bassam-Sheta/FLINK-time` commit `9da5a1283a446bc12515828eecce9f00e0b66d0d`. It preserves employee, manager, and Super Admin portals while extracting common sources. The security review covers repository source, API boundaries, authorization, authentication, request queues, financial-data exposure, cryptography, timers, manifests, installer behavior, dependencies, and local browser workflows. It does not prove the absence of all vulnerabilities.
 
 Local verification on 2026-09-30: Windows, Node 24.16.0, Chromium via Playwright 1.63.0. Node tests use adapters for Apps Script services. Browser tests execute the actual generated HTML with a mocked Google transport. They do not exercise Google OAuth, Sheets, Drive, Apps Script locks, quotas, or real multi-account isolation. A V8-style VM also executes the bundled encryption without Node crypto or browser APIs, with local adapters for Google HMAC and UUID functions.

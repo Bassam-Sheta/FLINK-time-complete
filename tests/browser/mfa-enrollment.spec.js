@@ -12,7 +12,7 @@ for (const portal of ['user','admin','superadmin']) {
     await expect(page.locator('#mfaEnrollmentSecret')).toHaveText('SYNTHETICSECRET');
     await page.locator('#mfaConfirmationCode').fill('000000');
     await page.getByRole('button',{name:'Confirm MFA',exact:true}).click();
-    await expect(page.getByRole('status')).toContainText('Invalid verification code');
+    await expect(page.locator('#modalContainer').getByRole('status')).toContainText('Invalid verification code');
     await page.locator('#mfaConfirmationCode').fill('123456');
     await page.getByRole('button',{name:'Confirm MFA',exact:true}).click();
     await expect(page.locator('#mfaEnrollmentSecret')).toHaveCount(0);

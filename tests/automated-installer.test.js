@@ -93,14 +93,14 @@ test('installer patches only the dedicated bootstrap sentinels', () => {
   assert.match(code, /escapeSingleQuotedJs_\(ownerEmail\)/);
 });
 
-test('installer rolls back the new Master Sheet when installation fails', () => {
+test('installer preserves an installation whose Google outcome may be unknown', () => {
   const start = code.indexOf('function installFlinkTime()');
   const end = code.indexOf('\nfunction getInstallerEmail_', start);
   const block = code.slice(start, end);
 
-  assert.match(block, /if \(spreadsheetId && !installed\)/);
-  assert.match(block, /cleanupFailedInstallation_\(spreadsheetId\)/);
-  assert.match(code, /DriveApp\.getFileById\(spreadsheetId\)\.setTrashed\(true\)/);
+  assert.doesNotMatch(block, /cleanupFailedInstallation_\(spreadsheetId\)/);
+  assert.match(block, /OUTCOME_UNKNOWN/);
+  assert.match(block, /saveInstallCheckpoint_\(checkpoint\)/);
 });
 
 test('Apps Script API access failure is handled without leaking OAuth tokens', () => {

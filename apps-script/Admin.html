@@ -4,9 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FLINK Time — Manager</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <meta name="referrer" content="no-referrer">
   <style>
     :root {
       --bg-base: #0B0F19;
@@ -430,10 +428,66 @@
       margin-bottom: 1.5rem;
     }
 
+    /* Focus: quiet surfaces and system fonts, with no external font requests. */
+    :root {
+      --bg-base: #101819; --bg-surface: #172223; --bg-card: #223133; --bg-hover: #2C4042;
+      --border: #415658; --border-focus: #ACEDCE;
+      --text-primary: #F2F7F5; --text-secondary: #B6C7C3; --text-muted: #A5B9B3;
+      --primary: #ACEDCE; --primary-hover: #C7F6DF; --primary-glow: rgba(172,237,206,.12);
+      --font-main: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --font-mono: 'Cascadia Code', Consolas, monospace;
+    }
+    body { background-image: none; }
+    .btn { color: #10201B; min-height: 42px; }
+    .btn-secondary, .btn-success, .btn-danger { color: #F2F7F5; }
+    .btn-success { background: #176548; } .btn-danger { background: #A82E37; }
+    .btn-success:hover { background: #1B7554; } .help-drawer { max-width: 100vw; }
+    .nav-btn { min-height: 42px; }
+    :focus-visible { outline: 3px solid var(--border-focus); outline-offset: 4px; }
+    .card { border-radius: 18px; box-shadow: none; backdrop-filter: none; }
+    .skip-link { position: fixed; top: -100px; left: 20px; z-index: 9999; padding: 12px; background: var(--primary); color: #10201B; }
+    .skip-link:focus { top: 12px; }
+    .view-intro { margin-bottom: 28px; display: flex; justify-content: space-between; align-items: end; gap: 16px; }
+    .view-intro h1 { font-size: 2.2rem; letter-spacing: -.045em; margin: 8px 0; }
+    .eyebrow { text-transform: uppercase; letter-spacing: .13em; font-size: .7rem; color: var(--primary); }
+    .view-intro p, .connection-note { font-size: .85rem; color: var(--text-secondary); }
+    .connection-note { max-width: 250px; }
+    dialog { color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border); border-radius: 18px; padding: 26px; margin: auto; width: min(520px, calc(100% - 32px)); }
+    dialog::backdrop { background: rgba(5,15,14,.8); }
+    .command-options { display: grid; gap: 8px; margin: 18px 0; }
+    .command-options button { text-align: left; }
+    .privacy-panel { margin-top: 24px; }
+    .timer-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); border-radius: 18px; padding: 24px; }
+    .timer-bar > div { min-width: 0; } .timer-clock { min-width: 0; text-align: left; }
+    #timerClockDisplay { font-size: clamp(2rem, 4vw, 3.5rem); letter-spacing: -.04em; }
+    @media (min-width: 1100px) {
+      #appHeader { position: fixed; inset: 0 auto 0 0; width: 218px; height: 100dvh; padding: 30px 18px; flex-direction: column; align-items: stretch; gap: 36px; border-right: 1px solid var(--border); border-bottom: 0; }
+      #appHeader .logo-badge { flex-wrap: wrap; gap: 8px; }
+      #appHeader .tag-workspace { max-width: 100%; white-space: normal; }
+      #navLinks { flex-direction: column; align-items: stretch; gap: 8px; }
+      #navLinks .nav-btn { text-align: left; border-radius: 10px; padding: 12px 16px; }
+      #appHeader .user-pill { margin-top: auto; flex-wrap: wrap; gap: 12px; }
+      body:has(#appHeader:not(.hidden)) main { margin-left: 218px; width: calc(100% - 218px); max-width: 1500px; padding: 36px 42px; }
+    }
+    @media (max-width: 1099px) {
+      #appHeader { flex-wrap: wrap; padding: 16px; gap: 12px; }
+      #navLinks { order: 3; width: 100%; overflow-x: auto; }
+      main { padding: 24px 16px; }
+    }
+    @media (max-width: 640px) {
+      .view-intro { display: block; } .connection-note { margin-top: 12px; }
+      .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .timer-bar { grid-template-columns: 1fr; } .logo-badge { flex-wrap: wrap; }
+      .card { padding: 20px; } .user-pill { flex-wrap: wrap; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+    }
     .hidden { display: none !important; }
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#mainContent">Skip to workspace</a>
 
   <!-- AUTH HEADER -->
   <header id="appHeader" class="hidden">
@@ -441,9 +495,10 @@
       <span>FLINK</span> TIME
       <span class="tag-workspace" id="currentWorkspaceBadge">Primary Workspace</span>
     </div>
-    <nav class="nav-links" id="navLinks"></nav>
+    <nav class="nav-links" id="navLinks" aria-label="Main navigation"></nav>
     <div class="user-pill">
-      <button class="help-btn" onclick="toggleHelpDrawer()">[ ? HELP ]</button>
+      <button class="help-btn" onclick="openCommandPalette()" aria-label="Quick navigation, Control or Command K">Go to · Ctrl K</button>
+      <button class="help-btn" id="helpTrigger" aria-controls="helpDrawer" aria-expanded="false" onclick="toggleHelpDrawer()">[ ? HELP ]</button>
       <span class="role-tag" id="userRoleBadge">USER</span>
       <span id="userDisplayName" style="font-weight: 600; font-size: 0.875rem;">User</span>
       <button class="nav-btn" onclick="logout()">Sign Out</button>
@@ -451,7 +506,11 @@
   </header>
 
   <!-- MAIN APP CONTAINER -->
-  <main>
+  <main id="mainContent" tabindex="-1">
+    <div id="viewIntro" class="view-intro hidden">
+      <div><span class="eyebrow">Your workspace, in focus</span><h1 id="pageTitle">Today</h1><p id="pageSubtitle">Choose a project. Make time for what matters.</p></div>
+      <div id="connectionNote" class="connection-note" role="status" aria-live="polite">Changes require a Google connection</div>
+    </div>
     <!-- 1. FIRST-RUN SETUP WIZARD & DEPLOYMENT ASSISTANT -->
     <div id="setupWizardContainer" class="hidden">
       <!-- Welcome Hero -->
@@ -460,7 +519,7 @@
           Welcome to <span style="background: linear-gradient(135deg, #3B82F6, #60A5FA); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">FLINK Time</span>
         </div>
         <p style="color: var(--text-secondary); font-size: 1.05rem; line-height: 1.5; margin-bottom: 2.5rem;">
-          A commercial-grade, multi-tenant workforce monitoring and time tracking platform built directly on Google Workspace. Zero servers, zero spreadsheet formula editing, pure GUI governance.
+          Time tracking, approvals and workspace administration on Google Workspace.
         </p>
         <div class="grid-2" style="margin-bottom: 2.5rem; text-align: left;">
           <div class="card" style="margin-bottom: 0; background: var(--bg-card); padding: 1.25rem;">
@@ -488,12 +547,9 @@
           <button class="btn btn-secondary btn-sm" onclick="hideDeploymentAssistant()">Back to Setup</button>
         </div>
         <div class="card" style="background: var(--bg-card); margin-bottom: 1.5rem;">
-          <div style="font-weight: 700; margin-bottom: 0.75rem;">System Environment Checks</div>
+          <div style="font-weight: 700; margin-bottom: 0.75rem;">Deployment verification</div>
           <div style="font-size: 0.85rem; line-height: 1.8;">
-            <div><span style="color: #34D399;">✓</span> Google Apps Script Runtime: Authorized V8 Engine</div>
-            <div><span style="color: #34D399;">✓</span> Master Sheet Repository: Connected & Bootstrapped</div>
-            <div><span style="color: #34D399;">✓</span> Google Drive Storage: Ready for Automated Backups</div>
-            <div><span style="color: #34D399;">✓</span> Frame Embedding Mode: ALLOWALL Enabled</div>
+            <p>Runtime authorization, storage access, backups and Google Sites embedding have not been checked on this page. The owner must run System Health and a restore drill in the actual deployment. Only the employee portal supports embedding.</p>
           </div>
         </div>
         <div style="margin-bottom: 1.5rem;">
@@ -548,7 +604,7 @@
             Verify & Sign In
           </button>
           <button type="button" class="btn btn-secondary" style="width:100%;"
-            onclick="cancelMfaChallenge()">Back to Password</button>
+            onclick="cancelMfaChallenge()">Back to Google sign-in</button>
         </form>
       </div>
     </div>
@@ -727,6 +783,7 @@
           <button class="nav-btn" id="saTab_backups" onclick="switchSaSubtab('backups')">Backups & Restore</button>
           <button class="nav-btn" id="saTab_health" onclick="switchSaSubtab('health')">System Health</button>
           <button class="nav-btn" id="saTab_settings" onclick="switchSaSubtab('settings')">Settings</button>
+          <button class="nav-btn" id="saTab_privacy" onclick="switchSaSubtab('privacy')">Privacy & Assurance</button>
           <button class="nav-btn" id="saTab_diagnostics" onclick="switchSaSubtab('diagnostics')">Advanced Diagnostics</button>
         </div>
       </div>
@@ -769,10 +826,10 @@
   </main>
 
   <!-- CONTEXTUAL HELP DRAWER -->
-  <div id="helpDrawer" class="help-drawer">
+  <div id="helpDrawer" class="help-drawer" role="complementary" aria-label="Contextual guidance" hidden>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
       <h3 style="font-size: 1.15rem; font-weight: 800;">Contextual Guidance</h3>
-      <button class="nav-btn" onclick="toggleHelpDrawer()">✕</button>
+      <button class="nav-btn" aria-label="Close guidance" onclick="toggleHelpDrawer()">✕</button>
     </div>
     <div id="helpDrawerBody" style="line-height: 1.6; font-size: 0.875rem; color: var(--text-secondary);">
       <div style="font-weight: 700; color: var(--text-primary); margin-bottom: 0.5rem;">FLINK Self-Guiding System</div>
@@ -782,6 +839,12 @@
 
   <!-- MODALS CONTAINER -->
   <div id="modalContainer"></div>
+  <dialog id="commandPalette" aria-labelledby="commandTitle">
+    <h2 id="commandTitle">Where would you like to go?</h2>
+    <label for="commandSearch">Find a page</label><input id="commandSearch" type="search" autocomplete="off">
+    <div id="commandOptions" class="command-options"></div>
+    <button class="btn btn-secondary" onclick="document.getElementById('commandPalette').close()">Close</button>
+  </dialog>
 
   <!-- CORE FRONTEND ENGINE SCRIPT -->
   <script>
@@ -901,6 +964,7 @@
     }
 
     const PRIVILEGED_STEP_UP_ACTIONS = new Set([
+      'privacy.initialize', 'privacy.notice.save', 'privacy.requests.review', 'assurance.save',
       'workspaces.create',
       'workspaces.assignAdmin',
       'workspaces.removeAdmin',
@@ -921,6 +985,7 @@
       'sessions.revoke',
       'backups.create',
       'backups.restoreApply',
+      'backups.restorePrepare',
       'jobs.dispatchHousekeeping',
       'jobs.dispatchRollups',
       'integrity.audit'
@@ -1008,8 +1073,84 @@
           stepUpToken: await ensurePrivilegedStepUp()
         });
       }
-      return rawApiCall(action, requestPayload, workspaceOverride);
+      // Only identical concurrent reads share a request. Never retain data or retry writes.
+      if (!COALESCED_READS.has(action)) return rawApiCall(action, requestPayload, workspaceOverride);
+      const token = state.token;
+      const workspace = workspaceOverride === undefined ? state.currentWorkspace : workspaceOverride;
+      const key = JSON.stringify([token, workspace, action, requestPayload]);
+      if (!pendingReads.has(key)) {
+        pendingReads.set(key, rawApiCall(action, requestPayload, workspace).finally(() => pendingReads.delete(key)));
+      }
+      const data = await pendingReads.get(key);
+      if (token !== state.token) throw new Error('Your session changed. Reload this view.');
+      return data === undefined ? undefined : JSON.parse(JSON.stringify(data));
     }
+    const COALESCED_READS = new Set(['workspaces.list', 'projects.list', 'tasks.list', 'tags.list', 'clients.list', 'dashboard.overview', 'dashboard.radar', 'reports.summary', 'reports.detailed', 'timesheet.getWeekly']);
+    const pendingReads = new Map();
+
+    function openCommandPalette() {
+      if (!state.user || document.getElementById('appHeader').classList.contains('hidden') || document.querySelector('#modalContainer .modal')) return;
+      const dialog = document.getElementById('commandPalette');
+      const options = document.getElementById('commandOptions');
+      options.replaceChildren();
+      document.querySelectorAll('#navLinks [data-view]').forEach(item => {
+        const button = document.createElement('button');
+        button.className = 'btn btn-secondary'; button.textContent = item.textContent;
+        button.onclick = () => { dialog.close(); navigate(item.dataset.view); document.getElementById('mainContent').focus(); };
+        options.appendChild(button);
+      });
+      const search = document.getElementById('commandSearch'); search.value = '';
+      search.oninput = () => options.querySelectorAll('button').forEach(button => {
+        button.hidden = !button.textContent.toLowerCase().includes(search.value.toLowerCase());
+      });
+      if (!dialog.open) dialog.showModal(); search.focus();
+    }
+    const focusableSelector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex="0"]';
+    let modalReturnFocus = null;
+    const modalHost = document.getElementById('modalContainer');
+    const enhanceLabels = root => root.querySelectorAll('label:not([for])').forEach(label => {
+      const control = label.nextElementSibling;
+      if (control && control.id && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) label.htmlFor = control.id;
+    });
+    new MutationObserver(() => {
+      const modal = modalHost.querySelector('.modal');
+      if (!modal) {
+        document.getElementById('mainContent').inert = false;
+        document.getElementById('appHeader').inert = false;
+        document.getElementById('helpDrawer').inert = false;
+        if (modalReturnFocus && modalReturnFocus.isConnected) modalReturnFocus.focus();
+        modalReturnFocus = null; return;
+      }
+      if (modal.getAttribute('role') === 'dialog') return;
+      if (!modalReturnFocus) modalReturnFocus = document.activeElement;
+      modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true'); modal.tabIndex = -1;
+      const title = modal.querySelector('h2, h3, .card-title');
+      if (title) { title.id = 'activeModalTitle'; modal.setAttribute('aria-labelledby', title.id); }
+      else modal.setAttribute('aria-label', 'Workspace dialog');
+      enhanceLabels(modal);
+      document.getElementById('mainContent').inert = true;
+      document.getElementById('appHeader').inert = true;
+      document.getElementById('helpDrawer').inert = true;
+      (modal.querySelector(focusableSelector) || modal).focus();
+    }).observe(modalHost, { childList: true });
+    document.addEventListener('keydown', event => {
+      const modal = modalHost.querySelector('.modal');
+      if (modal && event.key === 'Escape') { event.preventDefault(); closeModal(); return; }
+      if (modal && event.key === 'Tab') {
+        const items = [...modal.querySelectorAll(focusableSelector)].filter(item => item.getClientRects().length);
+        const first = items[0], last = items[items.length - 1];
+        if (!first) { event.preventDefault(); modal.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || document.activeElement === modal)) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommandPalette(); }
+      if (!modal && event.key === 'Escape' && !document.getElementById('helpDrawer').hidden) toggleHelpDrawer();
+    });
+    const updateConnectionNote = () => {
+      document.getElementById('connectionNote').textContent = navigator.onLine ? 'Changes require a Google connection' : 'Offline · reconnect before making changes';
+    };
+    window.addEventListener('online', updateConnectionNote); window.addEventListener('offline', updateConnectionNote);
+    window.addEventListener('DOMContentLoaded', () => { enhanceLabels(document); updateConnectionNote(); });
 
     // App Initialization
     window.addEventListener('DOMContentLoaded', async () => {
@@ -1048,6 +1189,7 @@
     });
 
     function showLogin() {
+      document.getElementById('viewIntro').classList.add('hidden');
       document.getElementById('loginView').classList.remove('hidden');
       document.getElementById('setupWizardContainer').classList.add('hidden');
       document.getElementById('appHeader').classList.add('hidden');
@@ -1198,6 +1340,7 @@
         btn.id = 'navBtn_' + link.id;
         btn.textContent = link.label;
         btn.onclick = () => navigate(link.id);
+        btn.dataset.view = link.id;
         nav.appendChild(btn);
       });
     }
@@ -1206,9 +1349,15 @@
       if (!embedAllowedViews().has(viewId)) {
         viewId = embedDefaultView();
       }
+      const headings = { timer: ['Today', 'Choose a project. Make time for what matters.'], mytime: ['My time', 'Review your week and submit with confidence.'], admin: ['Team workspace', 'People, projects and approvals in one place.'], superadmin: ['Control room', 'Manage access, review evidence and keep operations visible.'], reports: ['Reports', 'Turn recorded time into clear decisions.'], account: ['Your account', 'Google identity, authenticator and privacy requests.'] };
+      document.getElementById('viewIntro').classList.remove('hidden');
+      document.getElementById('pageTitle').textContent = headings[viewId][0];
+      document.getElementById('pageSubtitle').textContent = headings[viewId][1];
       document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
       const activeBtn = document.getElementById('navBtn_' + viewId);
       if (activeBtn) activeBtn.classList.add('active');
+      document.querySelectorAll('#navLinks .nav-btn').forEach(button => button.removeAttribute('aria-current'));
+      if (activeBtn) activeBtn.setAttribute('aria-current', 'page');
 
       ['timerView', 'timesheetView', 'adminDashboardView', 'superAdminView', 'reportsView', 'accountView'].forEach(id => {
         const el = document.getElementById(id);
@@ -1255,11 +1404,13 @@
     /* ------------------- TIMER LOGIC ------------------- */
     async function loadWorkspaceData() {
       if (!state.currentWorkspace) return;
+      const workspace = state.currentWorkspace;
       try {
         const [projects, tags] = await Promise.all([
-          apiCall('projects.list'),
-          apiCall('tags.list')
+          apiCall('projects.list', {}, workspace),
+          apiCall('tags.list', {}, workspace)
         ]);
+        if (workspace !== state.currentWorkspace) return;
         state.projects = Array.isArray(projects) ? projects : [];
         state.tags = Array.isArray(tags) ? tags : [];
 
@@ -1279,11 +1430,13 @@
 
     async function onTimerProjectChange() {
       const projId = document.getElementById('timerProjectSelect').value;
+      const workspace = state.currentWorkspace;
       const taskSelect = document.getElementById('timerTaskSelect');
       taskSelect.replaceChildren(new Option('Select Task (Optional)', ''));
       if (!projId) return;
       try {
-        const tasks = await apiCall('tasks.list', { projectId: projId });
+        const tasks = await apiCall('tasks.list', { projectId: projId }, workspace);
+        if (workspace !== state.currentWorkspace || projId !== document.getElementById('timerProjectSelect').value) return;
         tasks.forEach(t => {
           taskSelect.add(new Option(String(t.TaskName || ''), String(t.TaskID || '')));
         });
@@ -1848,7 +2001,83 @@
         wrap.append(label, valueEl);
         container.appendChild(wrap);
       });
+      const privacy = document.createElement('section'); privacy.className = 'privacy-panel'; container.appendChild(privacy);
+      renderPrivacyPanel(privacy, false);
     }
+
+    function privacyText(parent, tag, text) {
+      const node = document.createElement(tag); node.textContent = String(text); parent.appendChild(node); return node;
+    }
+    function privacyField(form, name, labelText, options = null, value = '') {
+      const label = document.createElement('label'); label.textContent = labelText;
+      const field = document.createElement(options ? 'select' : 'input'); field.name = name; field.required = true;
+      if (options) options.forEach(option => field.add(new Option(option.replaceAll('_', ' '), option)));
+      else { field.type = name === 'nextReviewAt' ? 'date' : 'text'; field.maxLength = name === 'evidenceUrl' || name === 'noticeUrl' ? 1000 : 2000; }
+      if (!options || value) field.value = value; label.appendChild(field); form.appendChild(label); return field;
+    }
+    function privacyForm(parent, caption, action, fields, basePayload, onSaved) {
+      const form = document.createElement('form'); form.style.display = 'grid'; form.style.gap = '12px';
+      fields.forEach(field => privacyField(form, ...field));
+      const status = privacyText(form, 'p', ''); status.setAttribute('role', 'status');
+      const button = privacyText(form, 'button', caption); button.className = 'btn'; button.type = 'submit';
+      form.onsubmit = async event => {
+        event.preventDefault(); button.disabled = true;
+        const payload = Object.assign({}, basePayload, Object.fromEntries(new FormData(form)));
+        try {
+          const result = await apiCall(action, payload);
+          status.textContent = result.auditRecorded === false ? 'Record saved, but audit logging failed. Ask the owner to review the audit trail.' : 'Record saved. This does not verify external evidence or perform erasure.';
+          button.remove(); if (onSaved && result.auditRecorded !== false) onSaved(result);
+        } catch (error) { status.textContent = error.message || 'Request failed. Retry with the same operation ID.'; button.disabled = false; }
+      };
+      parent.appendChild(form); return form;
+    }
+    async function renderPrivacyPanel(container, owner, before = undefined) {
+      container.replaceChildren(); privacyText(container, 'h2', owner ? 'Privacy & Assurance' : 'Privacy and your data');
+      privacyText(container, 'p', 'Requests and evidence require owner review. A recorded decision does not automatically export, restrict or erase data. Do not put passwords or sensitive identity documents in request details.');
+      try {
+        const notice = await apiCall('privacy.notice');
+        if (notice.configured) {
+          const noticeBox = document.createElement('details'); privacyText(noticeBox, 'summary', 'Privacy notice · ' + notice.policy.version);
+          for (const key of ['controller', 'privacyContact', 'purpose', 'lawfulBasis', 'dataCategories', 'retentionPolicy']) privacyText(noticeBox, 'p', key + ': ' + notice.policy[key]);
+          const link = privacyText(noticeBox, 'a', 'Full privacy notice'); link.href = notice.policy.noticeUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; container.appendChild(noticeBox);
+        } else privacyText(container, 'p', 'The owner has not configured the privacy notice. Contact your organization’s privacy representative.');
+        if (owner) {
+          const details = document.createElement('details'); privacyText(details, 'summary', 'Configure privacy notice'); container.appendChild(details);
+          const policy = notice.policy || {};
+          privacyForm(details, 'Save notice', 'privacy.notice.save', ['controller', 'privacyContact', 'purpose', 'lawfulBasis', 'dataCategories', 'retentionPolicy', 'noticeUrl', 'version'].map(key => [key, key, null, policy[key] || '']), {});
+          const initialize = privacyText(container, 'button', 'Initialize or check privacy registries'); initialize.className = 'btn btn-secondary';
+          initialize.onclick = async () => { initialize.disabled = true; try { const result = await apiCall('privacy.initialize'); if (result.auditRecorded === false) privacyText(container, 'p', 'Registries initialized, but audit logging failed. Review the audit trail.'); else renderPrivacyPanel(container, true); } catch (error) { privacyText(container, 'p', error.message); initialize.disabled = false; } };
+        }
+        const queue = await apiCall('privacy.requests.list', before === undefined ? {} : { before });
+        const submit = document.createElement('details'); privacyText(submit, 'summary', 'Request access, correction or another privacy right'); container.appendChild(submit);
+        privacyForm(submit, 'Submit privacy request', 'privacy.requests.submit', [['type', 'Request type', ['ACCESS', 'RECTIFICATION', 'ERASURE', 'RESTRICTION', 'PORTABILITY', 'OBJECTION']], ['detail', 'What would you like us to review?']], { operationId: crypto.randomUUID() }, () => renderPrivacyPanel(container, owner));
+        privacyText(container, 'h3', owner ? 'Request review queue' : 'Your requests');
+        queue.requests.forEach(row => {
+          const card = document.createElement('div'); card.className = 'card privacy-panel';
+          privacyText(card, 'h3', row.Type + ' · ' + row.Status);
+          privacyText(card, 'p', 'Requested: ' + row.RequestedAt + ' · Initial response due: ' + row.DueAt);
+          privacyText(card, 'p', row.Detail); if (row.Response) privacyText(card, 'p', 'Recorded response: ' + row.Response);
+          if (owner && row.Status !== 'CLOSED') {
+            privacyText(card, 'p', 'Before closing, deliver the response through your approved private channel and complete the applicable data actions. The evidence link is an operator attestation.');
+            privacyForm(card, 'Record review', 'privacy.requests.review', [['status', 'Decision stage', ['IN_REVIEW', 'CLOSED']], ['response', 'Decision and response delivered'], ['evidenceUrl', 'Private evidence URL']], { requestId: row.RequestID, version: Number(row.Version) }, () => renderPrivacyPanel(container, owner));
+          }
+          container.appendChild(card);
+        });
+        if (queue.nextBefore) { const more = privacyText(container, 'button', 'Older requests'); more.className = 'btn btn-secondary'; more.onclick = () => renderPrivacyPanel(container, owner, queue.nextBefore); }
+        if (owner) {
+          const assurance = await apiCall('assurance.list');
+          privacyText(container, 'h2', 'Control evidence · not independently assessed');
+          assurance.controls.forEach(control => {
+            const card = document.createElement('details'); privacyText(card, 'summary', control.title + ' · ' + control.state.replaceAll('_', ' '));
+            privacyText(card, 'p', control.reference + '. Evidence links and review dates are recorded, not independently verified.');
+            const existing = control.evidence || {};
+            privacyForm(card, 'Record evidence', 'assurance.save', [['owner', 'Control owner', null, existing.owner || ''], ['evidenceUrl', 'Private evidence URL', null, existing.url || ''], ['nextReviewAt', 'Next review date', null, existing.nextReviewAt || ''], ['notes', 'Review notes', null, existing.notes || '']], { controlId: control.id });
+            container.appendChild(card);
+          });
+        }
+      } catch (error) { privacyText(container, 'p', error.message || 'Privacy records could not be loaded. Contact your privacy representative.'); }
+    }
+    function renderSaPrivacy() { renderPrivacyPanel(document.getElementById('saSubtabContent'), true); }
 
 
     function openMfaModal() {
@@ -1906,9 +2135,10 @@
             state.token = result.sessionToken;
             sessionStorage.setItem('flink_session_token', state.token);
           }
+          const wasRequired = state.awaitingMfaEnrollment;
+          state.awaitingMfaEnrollment = false;
           closeModal(); alert('Authenticator enabled. Use the next fresh code for protected actions.');
-          if (state.awaitingMfaEnrollment) {
-            state.awaitingMfaEnrollment = false;
+          if (wasRequired) {
             if (state.pendingSetupContinuation) { state.pendingSetupContinuation = false; renderWizardStep(2); }
             else initApp();
           }
@@ -2997,6 +3227,7 @@
       else if (subtabId === 'backups') renderSaBackups();
       else if (subtabId === 'health') renderSaHealth();
       else if (subtabId === 'settings') renderSaSettings();
+      else if (subtabId === 'privacy') renderSaPrivacy();
       else if (subtabId === 'diagnostics') renderSaDiagnostics();
     }
 
@@ -3825,10 +4056,11 @@
       }
     }
 
-    function openRestoreWizard(backupId) {
+    function openRestoreWizard(backupId, workspaceId = state.currentWorkspace) {
       const modal = document.getElementById('modalContainer');
       modal.replaceChildren();
       modal.dataset.restoreBackupId = String(backupId || '');
+      modal.dataset.restoreWorkspaceId = String(workspaceId || '');
 
       const backdrop = document.createElement('div');
       backdrop.className = 'modal-backdrop';
@@ -3845,12 +4077,12 @@
       intro.style.fontSize = '0.85rem';
       intro.style.marginBottom = '1.25rem';
       intro.textContent =
-        'The selected registered backup will be re-verified, copied to an isolated restore candidate, active timers cleared, sessions revoked, rollups reconciled, and the workspace pointer changed only if all stages succeed.';
+        'The selected backup is checked before activation. Restore clears active timers and revokes workspace sessions. Recovery files are preserved if a stage fails; uncertain outcomes require owner review before another restore.';
 
       const idLine = document.createElement('div');
       idLine.style.marginBottom = '1rem';
       idLine.style.fontFamily = 'var(--font-mono)';
-      idLine.textContent = 'Backup ID: ' + String(backupId || '');
+      idLine.textContent = 'Workspace: ' + modal.dataset.restoreWorkspaceId + ' · Backup ID: ' + String(backupId || '');
 
       const passwordLabel = document.createElement('label');
       passwordLabel.textContent = 'Restore requires Google identity and fresh MFA verification.';
@@ -3870,6 +4102,7 @@
       actions.style.display = 'flex';
       actions.style.gap = '0.75rem';
       actions.style.justifyContent = 'flex-end';
+      actions.style.flexWrap = 'wrap';
 
       const cancel = document.createElement('button');
       cancel.className = 'btn btn-secondary';
@@ -3878,10 +4111,18 @@
 
       const apply = document.createElement('button');
       apply.className = 'btn btn-warning';
+      apply.id = 'restoreApplyButton';
       apply.textContent = 'Verify & Restore';
       apply.onclick = submitRestoreBackup;
 
-      actions.append(cancel, apply);
+      const restart = document.createElement('button');
+      restart.id = 'restoreNewAttemptButton'; restart.className = 'btn btn-secondary hidden';
+      restart.textContent = 'Start a new restore after review';
+      restart.onclick = () => {
+        sessionStorage.removeItem('flink_restore_intent_' + JSON.stringify([state.user.userId, workspaceId, backupId]));
+        openRestoreWizard(backupId, workspaceId);
+      };
+      actions.append(cancel, restart, apply);
       box.append(title, intro, idLine, passwordLabel, password, warning, actions);
       backdrop.appendChild(box);
       modal.appendChild(backdrop);
@@ -3890,30 +4131,55 @@
     async function submitRestoreBackup() {
       const modal = document.getElementById('modalContainer');
       const backupId = modal.dataset.restoreBackupId || '';
+      const workspaceId = modal.dataset.restoreWorkspaceId || '';
+      const applyButton = document.getElementById('restoreApplyButton');
+      const restartButton = document.getElementById('restoreNewAttemptButton');
+      if (!applyButton || applyButton.disabled) return;
       const adminPassword = document.getElementById('restoreAdminPassword')?.value || '';
-      if (!backupId) {
-        return alert('Backup ID is required.');
+      if (!backupId || !workspaceId) {
+        return alert('Backup and workspace IDs are required.');
       }
 
+      applyButton.disabled = true;
       try {
+        const pendingKey = 'flink_restore_intent_' + JSON.stringify([state.user.userId, workspaceId, backupId]);
+        const storedIntent = sessionStorage.getItem(pendingKey);
+        let intent = storedIntent ? JSON.parse(storedIntent) : null;
+        if (!intent) {
+          const latest = await apiCall('backups.restoreStatus', { workspaceId });
+          intent = { intentId: crypto.randomUUID(), previousOperationId: latest.operationId || '' };
+          sessionStorage.setItem(pendingKey, JSON.stringify(intent));
+        }
         await apiCall('backups.restoreValidate', {
-          workspaceId: state.currentWorkspace,
+          workspaceId,
           backupId
         });
+        const prepared = await apiCall('backups.restorePrepare', { workspaceId, backupId, ...intent });
         const result = await apiCall('backups.restoreApply', {
-          workspaceId: state.currentWorkspace,
+          workspaceId,
           backupId,
-          adminPassword
+          adminPassword,
+          operationId: prepared.operationId
         });
 
+        if (result.receiptRecorded !== false) sessionStorage.removeItem(pendingKey);
         closeModal();
         alert(
-          'Restore completed successfully. Safety backup: ' +
-          String(result.safetyBackupId || 'created')
+          (result.replayed ? 'Previous restore receipt recovered. No restore was repeated. Safety backup: ' : 'Restore completed successfully. Safety backup: ') +
+          String(result.safetyBackupId || 'created') +
+          (result.auditRecorded === false ? '\nCompletion audit logging failed. Ask the owner to record and review this restore.' : '') +
+          (result.receiptRecorded === false ? '\nRestore receipt could not be confirmed. Keep recovery files and ask the owner to review before another restore.' : '')
         );
         await renderSaBackups();
       } catch (e) {
-        alert(e.message || 'Restore failed. The live workspace pointer was not changed or was rolled back.');
+        const recovery = e.details;
+        const recoveryFiles = recovery ? '\nRecovery status: ' + recovery.recoveryStatus +
+          '\nOriginal Sheet: ' + recovery.previousSpreadsheetId + '\nCandidate Sheet: ' + recovery.candidateFileId +
+          '\nSafety backup: ' + recovery.safetyBackupId : '';
+        alert((e.message || 'Restore outcome could not be confirmed. Inspect the Master workspace pointer before retrying.') + recoveryFiles);
+        // An uncertain response must not invite another restore from this dialog.
+        applyButton.textContent = 'Close and review recovery state';
+        if (restartButton && recovery && ['NOT_SWITCHED', 'ROLLED_BACK_VERIFIED'].includes(recovery.recoveryStatus)) restartButton.classList.remove('hidden');
       }
     }
 
@@ -4159,7 +4425,10 @@
     /* ------------------- MODALS & DRAWERS ------------------- */
     function toggleHelpDrawer() {
       const drawer = document.getElementById('helpDrawer');
-      drawer.classList.toggle('open');
+      drawer.hidden = !drawer.hidden;
+      drawer.classList.toggle('open', !drawer.hidden);
+      document.getElementById('helpTrigger').setAttribute('aria-expanded', String(!drawer.hidden));
+      if (!drawer.hidden) drawer.querySelector('button').focus(); else document.getElementById('helpTrigger').focus();
     }
 
     function openCreateWorkspaceWizard() {
@@ -4422,6 +4691,7 @@
 
     function closeModal() {
       document.getElementById('modalContainer').replaceChildren();
+      if (state.awaitingMfaEnrollment) logout();
     }
 
     function formatSecs(s) {

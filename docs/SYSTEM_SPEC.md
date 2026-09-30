@@ -47,8 +47,9 @@ Client-side portal separation is a usability layer only. Server-side `ACTION_PER
 - Server-observed Google Workspace email must match the FLINK account email.
 - First-run root creation is owner-bound: **FLINK Time → Prepare Installation** records the Master Sheet owner, then Setup Step 1 requires both the active Google identity and the execute-as-deployer identity to match that prepared owner.
 - Normal installation does not use or expose a one-time setup key. Legacy setup-key properties are deleted after successful root creation if they exist.
-- Password hashing, failed-login throttling/lockout, session idle/absolute expiry, password-version invalidation, forced password change, and MFA rules remain in `Code.gs`.
-- High-risk Super Admin mutations require a short-lived step-up grant created only after fresh password + TOTP verification. Step-up rotates the authenticated session and is bound to the replacement SessionID.
+- `AUTH_MODE` defaults to `GOOGLE`: Google verifies the primary identity, and app MFA is mandatory. Legacy password code remains for compatibility tests and is inactive in this mode. Sessions enforce idle and absolute expiry plus account-epoch invalidation.
+- High-risk Super Admin mutations require a short-lived step-up grant created after server-observed Google identity + fresh TOTP verification. Step-up rotates the authenticated session and binds the grant to the replacement SessionID.
+- Authentication property writes admit at most 8,000 UTF-8 bytes per value and 400,000 bytes across the store, reclaiming only expired security records under the shared lock. This reserves headroom below Google's advertised limits; it does not eliminate execution/concurrency quotas.
 - The sole root SUPER_ADMIN is a protected trust anchor: generic CRUD cannot demote it, deactivate it, re-bind its Google Workspace identity, or disable its MFA.
 
 ## Privileged storage boundary
@@ -58,6 +59,8 @@ Client-side portal separation is a usability layer only. Server-side `ACTION_PER
 - Admin and Super Admin portals are direct Web App pages and are not framed with ALLOWALL.
 
 ## Data integrity
+Privacy requests and assurance evidence use two additive Master tabs. Existing installations initialize them through **Privacy & Assurance → Initialize or check privacy registries**. Requests are scoped to their subject; only the root owner can review all subjects or record assurance evidence, after step-up MFA. These workflows record decisions and evidence, not certification or automated erasure. Uncertain lifecycle execution enters `RECONCILIATION_REQUIRED` and cannot be approved again automatically.
+
 - UTC storage.
 - Workspace-local timezone/date/week interpretation.
 - One active timer per user.

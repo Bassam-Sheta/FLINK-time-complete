@@ -126,6 +126,7 @@ var CONSTANTS = {
   },
 
   REQUEST_STATUS: {
+    RECONCILIATION_REQUIRED: 'RECONCILIATION_REQUIRED',
     PENDING: 'PENDING',
     APPROVED: 'APPROVED',
     REJECTED: 'REJECTED',
@@ -233,6 +234,8 @@ var CONSTANTS = {
   },
 
   MASTER_TABS: {
+    PRIVACY_REQUESTS: 'PrivacyRequests',
+    CONTROL_EVIDENCE: 'ControlEvidence',
     SYSTEM: 'System',
     ACCOUNTS: 'Accounts',
     CREDENTIALS: 'Credentials',
@@ -297,6 +300,8 @@ var CONSTANTS = {
  * Master Control Sheet Column Definitions (18 Tabs)
  */
 var MASTER_SCHEMA = {
+  PrivacyRequests: ['RequestID', 'UserID', 'Type', 'Detail', 'Status', 'RequestedAt', 'DueAt', 'Response', 'EvidenceURL', 'ReviewedBy', 'ReviewedAt', 'Version'],
+  ControlEvidence: ['ControlID', 'Owner', 'EvidenceURL', 'Notes', 'ReviewedAt', 'ReviewedBy', 'NextReviewAt'],
   System: [
     'SystemID', 'InstanceName', 'Version', 'SchemaVersion', 'InstalledAtUTC', 'UpdatedAtUTC', 'LastHealthCheckUTC', 'Status'
   ],
@@ -976,6 +981,14 @@ function doPost(e) {
  * role authorizations, workspace binding, and mutation requirements.
  */
 const ACTION_PERMISSIONS = {
+  'privacy.notice': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: false },
+  'privacy.requests.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: false },
+  'privacy.requests.submit': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: true },
+  'privacy.initialize': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'privacy.notice.save': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'privacy.requests.review': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'assurance.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
+  'assurance.save': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
   // Public / Unauthenticated
   'auth.login': { authRequired: false, isWrite: true },
   'auth.verifyMfa': { authRequired: false, isWrite: true },
@@ -1073,6 +1086,8 @@ const ACTION_PERMISSIONS = {
   'backups.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'backups.restoreValidate': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'backups.restoreApply': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'backups.restorePrepare': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'backups.restoreStatus': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
   'rollups.rebuild': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN], requiresWorkspace: true, isWrite: true },
 
   // Jobs & Capacity
@@ -1086,6 +1101,7 @@ const ACTION_PERMISSIONS = {
 };
 
 const PRIVILEGED_STEP_UP_ACTIONS = new Set([
+  'privacy.initialize', 'privacy.notice.save', 'privacy.requests.review', 'assurance.save',
   'workspaces.create',
   'workspaces.assignAdmin',
   'workspaces.removeAdmin',
@@ -1106,6 +1122,7 @@ const PRIVILEGED_STEP_UP_ACTIONS = new Set([
   'sessions.revoke',
   'backups.create',
   'backups.restoreApply',
+  'backups.restorePrepare',
   'jobs.dispatchHousekeeping',
   'jobs.dispatchRollups',
   'integrity.audit'
@@ -1295,10 +1312,21 @@ function dispatchAction_(action, data) {
     PRIVILEGED_STEP_UP_ACTIONS.has(action)
   ) {
     AuthService.assertStepUp(authContext, payload.stepUpToken || '');
-    AuditService.requirePrivilegedActionAudit(authContext, action, wsId || '');
+    // Backup routes take their target from the payload before the page's
+    // workspace header. Audit the same target when the page selection changes.
+    const auditWorkspaceId = action.startsWith('backups.') ? payload.workspaceId || wsId : wsId;
+    AuditService.requirePrivilegedActionAudit(authContext, action, auditWorkspaceId || '');
   }
 
   switch (action) {
+    case 'privacy.notice': return PrivacyService.getNotice();
+    case 'privacy.requests.list': return PrivacyService.list(authContext, payload);
+    case 'privacy.requests.submit': return PrivacyService.submit(authContext, payload);
+    case 'privacy.initialize': return PrivacyService.initialize(authContext);
+    case 'privacy.notice.save': return PrivacyService.saveNotice(authContext, payload);
+    case 'privacy.requests.review': return PrivacyService.review(authContext, payload);
+    case 'assurance.list': return PrivacyService.assurance(authContext);
+    case 'assurance.save': return PrivacyService.saveEvidence(authContext, payload);
     case 'auth.validateSession':
       return { user: authContext.user, role: authContext.role, mfaEnrollmentRequired: needsMfaEnrollment };
 
@@ -1617,8 +1645,15 @@ function dispatchAction_(action, data) {
         authContext,
         payload.workspaceId || wsId,
         payload.backupId,
-        payload.adminPassword
+        payload.adminPassword,
+        payload.operationId
       );
+
+    case 'backups.restorePrepare':
+      return BackupService.prepareRestore(authContext, payload.workspaceId || wsId, payload.backupId, payload.intentId, payload.previousOperationId);
+
+    case 'backups.restoreStatus':
+      return BackupService.restoreStatus(authContext, payload.workspaceId || wsId);
 
     case 'rollups.rebuild':
       return RollupService.rebuildRollups(wsId);
@@ -2876,6 +2911,34 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
 
   _googleMode() { return CONSTANTS.AUTH_MODE === 'GOOGLE'; },
 
+  _writeSecurityProperty(key, serialized) {
+    const bytes = value => unescape(encodeURIComponent(String(value))).length;
+    if (bytes(serialized) > 8000) throw new AppError(ERROR_CODES.SERVER_BUSY, 'Security state exceeds its safe size limit.', 503);
+    return this._withLoginStateLock(() => {
+      const props = PropertiesService.getScriptProperties();
+      // All real Apps Script stores expose getProperties. Minimal local adapters
+      // may omit it; quota admission is exercised separately with a full adapter.
+      if (typeof props.getProperties === 'function') {
+        const all = props.getProperties(); let size = 0;
+        for (const [name, value] of Object.entries(all)) size += bytes(name) + bytes(value);
+        if (size > 350000) {
+          for (const [name, value] of Object.entries(all)) {
+            if (!/^FLINK_(?:MFA_SESSION|MFA_CHALLENGE|MFA_ENROLLMENT|STEP_UP|REAUTH)_/.test(name)) continue;
+            let expires = NaN; try { expires = Number(JSON.parse(value).expiresAtMs); } catch (e) {}
+            if (!Number.isFinite(expires) || expires <= Date.now()) {
+              props.deleteProperty(name); size -= bytes(name) + bytes(value); delete all[name];
+            }
+          }
+        }
+        const replaced = Object.hasOwn(all, key) ? bytes(key) + bytes(all[key]) : 0;
+        if (size - replaced + bytes(key) + bytes(serialized) > 400000) {
+          throw new AppError(ERROR_CODES.SERVER_BUSY, 'Security state is near capacity. Ask the owner to run housekeeping before signing in again.', 503);
+        }
+      }
+      props.setProperty(key, serialized);
+    });
+  },
+
   _verifyPrimaryIdentity(context, password, credentials) {
     if (!credentials) return false;
     if (!this._googleMode()) return SecurityService.verifyPassword(password, credentials.PasswordHash);
@@ -2887,7 +2950,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
     if (!this._googleMode()) return;
     const key = 'FLINK_MFA_SESSION_' + session.sessionId;
     const record = JSON.stringify({ userId, expiresAtMs: Date.now() + CONSTANTS.LIMITS.SESSION_ABSOLUTE_TIMEOUT_HOURS * 3600000 });
-    if (typeof PropertiesService !== 'undefined') PropertiesService.getScriptProperties().setProperty(key, record);
+    if (typeof PropertiesService !== 'undefined') this._writeSecurityProperty(key, record);
     else this._mfaSessionMemory[key] = record;
   },
 
@@ -2979,7 +3042,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
     }
     record.attempts += 1;
     const serialized = JSON.stringify(record);
-    if (props) props.setProperty(key, serialized);
+    if (props) this._writeSecurityProperty(key, serialized);
     else this._reauthMemory[key] = serialized;
   },
 
@@ -2995,9 +3058,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
     });
 
     if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
-      PropertiesService
-        .getScriptProperties()
-        .setProperty(this._mfaChallengePropertyKey(userId), record);
+      this._writeSecurityProperty(this._mfaChallengePropertyKey(userId), record);
       return;
     }
 
@@ -3040,7 +3101,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
   _storeMfaEnrollment(userId, record) {
     const serialized = JSON.stringify(record || {});
     if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
-      PropertiesService.getScriptProperties().setProperty(
+      this._writeSecurityProperty(
         this._mfaEnrollmentPropertyKey(userId),
         serialized
       );
@@ -3079,7 +3140,7 @@ var AuthService = (typeof global !== 'undefined' && global.AuthService) || {
   _storeStepUp(sessionId, record) {
     const serialized = JSON.stringify(record || {});
     if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
-      PropertiesService.getScriptProperties().setProperty(this._stepUpPropertyKey(sessionId), serialized);
+      this._writeSecurityProperty(this._stepUpPropertyKey(sessionId), serialized);
     } else {
       this._stepUpMemory[sessionId] = serialized;
     }
@@ -11067,7 +11128,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
     const requestedData = this._safeRequestedData(payload.requestedData);
     AuthorizationService.assertWorkspaceAccess(adminContext, workspaceId);
 
-    if (!Object.values(CONSTANTS.REQUEST_TYPES).includes(requestType)) {
+    if (![CONSTANTS.REQUEST_TYPES.NEW_USER, CONSTANTS.REQUEST_TYPES.MAKE_PASSIVE, CONSTANTS.REQUEST_TYPES.PASSWORD_RESET].includes(requestType)) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Invalid request type: ${requestType}`);
     }
 
@@ -11268,6 +11329,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
       lock.releaseLock();
     }
 
+    let executionAttempted = false;
     try {
       const originWorkspace = MasterRepository.getWorkspace(req.WorkspaceID);
       if (!originWorkspace || originWorkspace.Status !== CONSTANTS.WORKSPACE_STATUS.ACTIVE) {
@@ -11304,6 +11366,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
         );
         requestedData.email = Validation.validateEmail(requestedData.email);
 
+        executionAttempted = true;
         executionResult = UserService.createUser(superAdminContext, {
           username: requestedData.username,
           displayName: requestedData.displayName,
@@ -11342,6 +11405,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
         }
 
         if (req.RequestType === CONSTANTS.REQUEST_TYPES.MAKE_PASSIVE) {
+          executionAttempted = true;
           executionResult = UserService.makeUserPassive(
             superAdminContext,
             req.TargetUserID,
@@ -11349,6 +11413,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
           );
         } else {
           const tempPassword = SecurityService.generateTemporaryPassword();
+          executionAttempted = true;
           executionResult = AuthService.resetPasswordByAdmin(
             superAdminContext,
             req.TargetUserID,
@@ -11369,7 +11434,8 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
         ExecutedAt: new Date().toISOString()
       });
 
-      MasterRepository.logGlobalAudit({
+      let auditRecorded = false;
+      try { auditRecorded = MasterRepository.logGlobalAudit({
         ActorUserID: superAdminContext.userId,
         ActorRole: superAdminContext.role,
         WorkspaceID: req.WorkspaceID,
@@ -11378,18 +11444,18 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
         Action: CONSTANTS.AUDIT_EVENTS.REQUEST_EXECUTED,
         AfterJSON: updated,
         Reason: reviewComment
-      });
+      }) === true; } catch (auditError) { console.error('Request committed but audit logging failed.'); }
 
-      return { ok: true, request: updated, executionResult };
+      return { ok: true, request: updated, executionResult, auditRecorded };
     } catch (executionErr) {
-      // Release the execution claim for a safe retry while preserving the error
-      // to the reviewer. Another reviewer can only retry after this reset.
+      // A service or Sheets call can commit before its response fails. Do not
+      // automatically retry an uncertain mutation and duplicate its effects.
       try {
         MasterRepository.updateRequest(requestId, {
-          Status: CONSTANTS.REQUEST_STATUS.PENDING,
-          ReviewedBy: '',
-          ReviewedAt: '',
-          ReviewComment: ''
+          Status: executionAttempted ? 'RECONCILIATION_REQUIRED' : CONSTANTS.REQUEST_STATUS.PENDING,
+          ReviewedBy: executionAttempted ? superAdminContext.userId : '',
+          ReviewedAt: executionAttempted ? now : '',
+          ReviewComment: executionAttempted ? 'Execution outcome needs owner reconciliation. Inspect the target account and workspace before any new request.' : ''
         });
       } catch (resetErr) {
         console.error(
@@ -13781,7 +13847,77 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
    * Restores a registered workspace backup through a new working copy.
    * The immutable backup file itself never becomes the live workspace.
    */
-  restoreBackup(superAdminContext, workspaceId, backupId, adminPassword) {
+  _readRestoreWorkspace(workspaceId) {
+    if (typeof SpreadsheetApp !== 'undefined' && SpreadsheetApp.flush) SpreadsheetApp.flush();
+    if (MasterRepository.beginRequest) MasterRepository.beginRequest();
+    if (typeof WorkspaceRouter !== 'undefined' && WorkspaceRouter.clearCache) WorkspaceRouter.clearCache();
+    return MasterRepository.getWorkspace(workspaceId);
+  },
+
+  _restoreOperationKey(workspaceId) { return 'FLINK_RESTORE_WORKSPACE_' + workspaceId; },
+  _getRestoreOperation(workspaceId) {
+    const raw = PropertiesService.getScriptProperties().getProperty(this._restoreOperationKey(workspaceId));
+    if (!raw) return null;
+    try {
+      const record = JSON.parse(raw);
+      if (record.workspaceId !== workspaceId || typeof record.operationId !== 'string' ||
+          typeof record.intentId !== 'string' || typeof record.ownerId !== 'string' ||
+          !['PREPARED', 'RUNNING', 'COMPLETED', 'FAILED', 'RECONCILIATION_REQUIRED'].includes(record.status) ||
+          (record.status === 'PREPARED' && !Number.isFinite(Number(record.expiresAtMs))) ||
+          (record.status === 'COMPLETED' && (!record.result || record.result.ok !== true ||
+            record.result.workspaceId !== workspaceId || record.result.backupId !== record.backupId ||
+            typeof record.result.restoredSpreadsheetId !== 'string'))) throw Error('Invalid record');
+      return record;
+    } catch (error) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Restore operation record needs owner review. It will not be reset automatically.', 409);
+    }
+  },
+  _saveRestoreOperation(record) {
+    // Reuse storage admission under the already-held ScriptLock. One bounded
+    // record per workspace; superseded operation IDs are always rejected.
+    AuthService._writeSecurityProperty(this._restoreOperationKey(record.workspaceId), JSON.stringify(record));
+  },
+  restoreStatus(context, workspaceId) {
+    AuthorizationService.assertRole(context, [CONSTANTS.ROLES.SUPER_ADMIN]);
+    const record = this._getRestoreOperation(workspaceId);
+    return record ? { operationId: record.operationId, status: record.status, stage: record.stage } : { operationId: '', status: 'NONE' };
+  },
+  prepareRestore(context, workspaceId, backupId, intentId, previousOperationId) {
+    AuthorizationService.assertRole(context, [CONSTANTS.ROLES.SUPER_ADMIN]);
+    if (typeof intentId !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(intentId) || !workspaceId || !backupId ||
+        typeof previousOperationId !== 'string' || previousOperationId.length > 100) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Workspace, backup and bounded restore intent IDs are required.', 400);
+    }
+    const lock = LockService.getScriptLock(); lock.waitLock(30000);
+    try {
+      const previous = this._getRestoreOperation(workspaceId);
+      if (previous && previous.intentId === intentId) {
+        if (previous.ownerId !== context.userId || previous.backupId !== backupId) throw new AppError(ERROR_CODES.CONFLICT, 'Restore intent belongs to a different request.', 409);
+        // PREPARED has performed no restore side effects. Renewing an expired
+        // preparation retires its old operation ID without repeating a restore.
+        if (previous.status === 'PREPARED' && Date.now() >= Number(previous.expiresAtMs)) {
+          previous.operationId = Validation.generateId('RST'); previous.expiresAtMs = Date.now() + 10 * 60000;
+          this._saveRestoreOperation(previous);
+        }
+        return { operationId: previous.operationId, status: previous.status };
+      }
+      if (previousOperationId !== (previous ? previous.operationId : '')) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Restore operation changed. Review the latest state before starting a new intent.', 409);
+      }
+      if (previous && (previous.status === 'RUNNING' || previous.status === 'RECONCILIATION_REQUIRED' ||
+          (previous.status === 'PREPARED' && Date.now() < Number(previous.expiresAtMs)))) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'A prior restore needs owner reconciliation before another can be prepared.', 409, previous.recovery || null);
+      }
+      const ws = this._readRestoreWorkspace(workspaceId);
+      if (!ws || ws.Status !== CONSTANTS.WORKSPACE_STATUS.ACTIVE) throw new AppError(ERROR_CODES.CONFLICT, 'Restore requires an ACTIVE workspace.', 409);
+      const record = { workspaceId, backupId, intentId, ownerId: context.userId, operationId: Validation.generateId('RST'),
+        status: 'PREPARED', stage: 'PREPARED', createdAt: new Date().toISOString(), expiresAtMs: Date.now() + 10 * 60000 };
+      this._saveRestoreOperation(record);
+      return { operationId: record.operationId, status: record.status };
+    } finally { lock.releaseLock(); }
+  },
+
+  restoreBackup(superAdminContext, workspaceId, backupId, adminPassword, operationId) {
     AuthorizationService.assertRole(superAdminContext, [CONSTANTS.ROLES.SUPER_ADMIN]);
     if (!workspaceId || !backupId || (CONSTANTS.AUTH_MODE !== 'GOOGLE' && !adminPassword)) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'workspaceId, backupId, and Super Admin password are required for restore.', 400);
@@ -13809,9 +13945,18 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
 
     let previousSpreadsheetId = '';
     let candidateFileId = '';
-    let workspaceWasQuiesced = false;
+    let workspaceMutationAttempted = false;
+    let safetyBackupId = '';
+    let operation = null, operationStarted = false, sideEffectsAttempted = false;
 
     try {
+      operation = this._getRestoreOperation(workspaceId);
+      if (!operation || operation.operationId !== operationId || operation.backupId !== backupId || operation.ownerId !== superAdminContext.userId) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Prepare this restore before applying it. Unknown or superseded operations cannot execute.', 409);
+      }
+      if (operation.status === 'COMPLETED' && operation.result) return { ...operation.result, replayed: true };
+      if (operation.status !== 'PREPARED') throw new AppError(ERROR_CODES.CONFLICT, 'This restore already ran or requires owner reconciliation. It will not execute again.', 409, operation.recovery || null);
+      if (!Number.isFinite(Number(operation.expiresAtMs)) || Date.now() >= Number(operation.expiresAtMs)) throw new AppError(ERROR_CODES.CONFLICT, 'Prepared restore expired. Start a new explicit restore intent.', 409);
       const ws = MasterRepository.getWorkspace(workspaceId);
       if (!ws) throw new AppError(ERROR_CODES.NOT_FOUND, `Workspace ${workspaceId} not found.`, 404);
       if (ws.Status !== CONSTANTS.WORKSPACE_STATUS.ACTIVE) {
@@ -13823,12 +13968,21 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
       const record = this._getRegistryRecord(backupId);
 
       // Safety snapshot of the currently live workspace before any pointer change.
+      operationStarted = true;
+      operation.status = 'RUNNING'; operation.stage = 'CREATING_SAFETY_BACKUP'; operation.previousSpreadsheetId = previousSpreadsheetId;
+      this._saveRestoreOperation(operation);
+      sideEffectsAttempted = true;
       const safetyBackup = this._createBackupUnlocked(superAdminContext, workspaceId);
+      safetyBackupId = safetyBackup.backupId;
 
+      operation.safetyBackupId = safetyBackupId; operation.stage = 'CREATING_CANDIDATE';
+      this._saveRestoreOperation(operation);
       const backupFile = DriveApp.getFileById(record.BackupFileID);
       const candidateName = `RESTORE_${workspaceId}_${new Date().toISOString().replace(/[:.]/g, '-')}`;
       const candidateFile = backupFile.makeCopy(candidateName);
       candidateFileId = candidateFile.getId();
+      operation.candidateFileId = candidateFileId; operation.stage = 'CHECKING_CANDIDATE';
+      this._saveRestoreOperation(operation);
 
       const candidateSpreadsheet = this._openBackupSpreadsheet(candidateFileId);
       const candidateManifest = this._buildManifest(candidateSpreadsheet, 'WORKSPACE', workspaceId);
@@ -13841,11 +13995,13 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
       const candidateRollupValidation = this._validateWorkspaceRollupTotals(candidateSpreadsheet);
 
       // Quiesce all normal workspace operations before changing the live pointer.
+      // Set this before the call: Google may commit a write whose response is lost.
+      operation.stage = 'SWITCHING_WORKSPACE'; this._saveRestoreOperation(operation);
+      workspaceMutationAttempted = true;
       MasterRepository.updateWorkspace(workspaceId, {
         Status: CONSTANTS.WORKSPACE_STATUS.MAINTENANCE,
         UpdatedAt: new Date().toISOString()
       });
-      workspaceWasQuiesced = true;
 
       // Clear stale active timers directly on the candidate while it is still offline.
       const timersSheet = candidateSpreadsheet.getSheetByName(CONSTANTS.WORKSPACE_TABS.ACTIVE_TIMERS);
@@ -13883,24 +14039,36 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
         WorkspaceRouter.clearCache();
       }
 
-      MasterRepository.logGlobalAudit({
-        ActorUserID: superAdminContext.userId,
-        ActorRole: superAdminContext.role,
-        WorkspaceID: workspaceId,
-        EntityType: 'WORKSPACE',
-        EntityID: workspaceId,
-        Action: 'RESTORE_COMPLETED',
-        BeforeJSON: { spreadsheetId: previousSpreadsheetId },
-        AfterJSON: {
-          spreadsheetId: candidateFileId,
-          restoredBackupId: backupId,
-          safetyBackupId: safetyBackup.backupId,
-          candidateRollupValidation
-        },
-        Reason: 'Verified registered workspace restore applied through isolated working copy'
-      });
+      const committed = this._readRestoreWorkspace(workspaceId);
+      if (!committed || committed.SpreadsheetID !== candidateFileId || committed.Status !== CONSTANTS.WORKSPACE_STATUS.ACTIVE) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Restore activation could not be confirmed.', 409);
+      }
 
-      return {
+      // Once activation is confirmed, an audit outage must not undo the restore.
+      let auditRecorded = false;
+      try {
+        auditRecorded = MasterRepository.logGlobalAudit({
+          ActorUserID: superAdminContext.userId,
+          ActorRole: superAdminContext.role,
+          WorkspaceID: workspaceId,
+          EntityType: 'WORKSPACE',
+          EntityID: workspaceId,
+          Action: 'RESTORE_COMPLETED',
+          BeforeJSON: { spreadsheetId: previousSpreadsheetId },
+          AfterJSON: {
+            spreadsheetId: candidateFileId,
+            restoredBackupId: backupId,
+            safetyBackupId: safetyBackup.backupId,
+            operationId: operation.operationId,
+            candidateRollupValidation
+          },
+          Reason: 'Verified registered workspace restore applied through isolated working copy'
+        }) === true;
+      } catch (auditErr) {
+        console.error('Restore committed, but completion audit logging failed.');
+      }
+
+      const result = {
         ok: true,
         workspaceId,
         backupId,
@@ -13908,10 +14076,22 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
         previousSpreadsheetId,
         restoredSpreadsheetId: candidateFileId,
         status: CONSTANTS.WORKSPACE_STATUS.ACTIVE,
+        auditRecorded,
+        receiptRecorded: true,
+        completedAt: new Date().toISOString(),
         message: `Workspace ${workspaceId} restored from verified backup ${backupId}.`
       };
+      operation.status = 'COMPLETED'; operation.stage = 'COMPLETED'; operation.result = result;
+      try { this._saveRestoreOperation(operation); }
+      catch (receiptError) {
+        result.receiptRecorded = false;
+        console.error('Restore committed; operation receipt requires owner verification.');
+      }
+      return result;
     } catch (err) {
-      if (workspaceWasQuiesced && previousSpreadsheetId) {
+      if (!operationStarted) throw err;
+      let rollbackVerified = false;
+      if (workspaceMutationAttempted && previousSpreadsheetId) {
         try {
           MasterRepository.updateWorkspace(workspaceId, {
             SpreadsheetID: previousSpreadsheetId,
@@ -13922,14 +14102,39 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
             WorkspaceRouter.clearCache();
           }
         } catch (rollbackErr) {
-          console.error('Restore rollback failed: ' + rollbackErr.message);
+          console.error('Restore rollback write was not acknowledged. Reading the current pointer.');
+        }
+
+        // A response is not proof of persistence, and a lost response is not proof
+        // of failure. Confirm the actual pointer after clearing request caches.
+        try {
+          const current = this._readRestoreWorkspace(workspaceId);
+          rollbackVerified = !!current && current.SpreadsheetID === previousSpreadsheetId && current.Status === CONSTANTS.WORKSPACE_STATUS.ACTIVE;
+        } catch (readErr) {
+          console.error('Restore recovery state could not be read.');
+        }
+        if (!rollbackVerified) {
+          try {
+            MasterRepository.updateWorkspace(workspaceId, {
+              Status: CONSTANTS.WORKSPACE_STATUS.MAINTENANCE,
+              UpdatedAt: new Date().toISOString()
+            });
+            this._readRestoreWorkspace(workspaceId);
+          } catch (maintenanceErr) {
+            console.error('Restore maintenance state requires owner verification.');
+          }
         }
       }
 
-      if (candidateFileId) {
-        try { DriveApp.getFileById(candidateFileId).setTrashed(true); } catch (trashErr) {}
-      }
-
+      // Preserve the original, candidate and safety snapshot. In an uncertain
+      // rollback the candidate may still be live; automated trashing is unsafe.
+      const recovery = {
+        recoveryStatus: rollbackVerified ? 'ROLLED_BACK_VERIFIED' : sideEffectsAttempted ? 'RECONCILIATION_REQUIRED' : 'NOT_SWITCHED',
+        workspaceId, backupId, previousSpreadsheetId, candidateFileId, safetyBackupId, operationId: operation.operationId
+      };
+      operation.status = recovery.recoveryStatus === 'RECONCILIATION_REQUIRED' ? 'RECONCILIATION_REQUIRED' : 'FAILED';
+      operation.stage = operation.status; operation.recovery = recovery;
+      try { this._saveRestoreOperation(operation); } catch (receiptError) { console.error('Restore recovery record requires owner verification.'); }
       try {
         MasterRepository.logGlobalAudit({
           ActorUserID: superAdminContext.userId,
@@ -13939,13 +14144,20 @@ var BackupService = (typeof global !== 'undefined' && global.BackupService) || {
           EntityID: workspaceId,
           Action: 'RESTORE_FAILED',
           BeforeJSON: { spreadsheetId: previousSpreadsheetId },
-          AfterJSON: { backupId, candidateFileId },
+          AfterJSON: recovery,
           Reason: err && err.message ? err.message : 'Restore failed'
         });
       } catch (auditErr) {}
 
+      if (workspaceMutationAttempted || sideEffectsAttempted) {
+        throw new AppError(ERROR_CODES.CONFLICT,
+          rollbackVerified
+            ? 'Restore failed. The original workspace pointer was read back as ACTIVE. All recovery files were preserved.'
+            : 'Restore outcome requires owner reconciliation. Do not retry or delete recovery files. Inspect the Master workspace pointer and maintenance status.',
+          409, recovery);
+      }
       if (err instanceof AppError) throw err;
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Restore failed and was rolled back: ' + err.message, 500);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Restore preparation failed before a workspace change was attempted. Recovery files were preserved.', 500);
     } finally {
       if (scriptLock) {
         try { scriptLock.releaseLock(); } catch (e) {}
@@ -14369,6 +14581,176 @@ var NotificationService = (typeof global !== 'undefined' && global.NotificationS
   }
 };
 
+/** Privacy operations and assurance evidence. These records do not certify compliance. */
+var PrivacyService = {
+  requestTypes: ['ACCESS', 'RECTIFICATION', 'ERASURE', 'RESTRICTION', 'PORTABILITY', 'OBJECTION'],
+  controls: [
+    { id: 'ACCESS', title: 'Access and MFA review', reference: 'SOC 2 CC6; GDPR Art. 32' },
+    { id: 'CHANGE', title: 'Reviewed changes and release tests', reference: 'SOC 2 CC8' },
+    { id: 'RECOVERY', title: 'Backup restore drill and recovery objectives', reference: 'SOC 2 A1; GDPR Art. 32' },
+    { id: 'INCIDENT', title: 'Incident response and breach procedure', reference: 'SOC 2 CC7; GDPR Arts. 33–34' },
+    { id: 'PROCESSING', title: 'Processing register, lawful basis and DPIA review', reference: 'GDPR Arts. 6, 30, 35' },
+    { id: 'VENDORS', title: 'Google contract, subprocessors and transfers', reference: 'SOC 2 CC9; GDPR Arts. 28, 44–49' },
+    { id: 'RETENTION', title: 'Retention, erasure and backup expiry review', reference: 'GDPR Arts. 5, 17, 25' }
+  ],
+  _text(value, name, max = 2000, required = true) {
+    if (typeof value !== 'string' || value.length > max || (required && !value.trim())) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, name + ' must be bounded text.', 400);
+    }
+    return value.trim();
+  },
+  _url(value) {
+    const text = this._text(value, 'Evidence URL', 1000);
+    if (!/^https:\/\/[a-z0-9][a-z0-9.-]*(?::443)?(?:[/?#][^\s]*)?$/i.test(text)) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Use an HTTPS URL without embedded credentials.', 400);
+    }
+    return text;
+  },
+  _root(context) { AuthorizationService.assertRole(context, [CONSTANTS.ROLES.SUPER_ADMIN]); },
+  _lock(operation) {
+    const lock = LockService.getScriptLock(); lock.waitLock(10000);
+    try { return operation(); } finally { lock.releaseLock(); }
+  },
+  _audit(context, id, action) {
+    try { return MasterRepository.logGlobalAudit({ ActorUserID: context.userId, ActorRole: context.role,
+      EntityType: 'PRIVACY', EntityID: id, Action: action }) === true; }
+    catch (error) { console.error('Privacy record committed but audit logging failed.'); return false; }
+  },
+  _sheet(tab) {
+    const sheet = MasterRepository.getMasterSpreadsheet().getSheetByName(tab);
+    if (!sheet) throw new AppError(ERROR_CODES.CONFLICT, 'The owner must initialize Privacy & Assurance first.', 409);
+    const headers = sheet.getRange(1, 1, 1, MASTER_SCHEMA[tab].length).getValues()[0];
+    if (headers.some((value, i) => value !== MASTER_SCHEMA[tab][i])) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Privacy schema differs from the expected headers. Review it before continuing.', 409);
+    }
+    return sheet;
+  },
+  initialize(context) {
+    this._root(context);
+    return this._lock(() => {
+      const ss = MasterRepository.getMasterSpreadsheet();
+      for (const tab of ['PrivacyRequests', 'ControlEvidence']) {
+        if (!ss.getSheetByName(tab)) ss.insertSheet(tab).getRange(1, 1, 1, MASTER_SCHEMA[tab].length).setValues([MASTER_SCHEMA[tab]]);
+        this._sheet(tab);
+      }
+      return { initialized: true, auditRecorded: this._audit(context, 'REGISTRY', 'PRIVACY_INITIALIZED') };
+    });
+  },
+  getNotice() {
+    const raw = MasterRepository.getGlobalSettingStrict('PRIVACY_NOTICE_JSON', '');
+    let policy = null;
+    if (raw) {
+      try {
+        policy = JSON.parse(raw);
+        for (const key of ['controller', 'privacyContact', 'purpose', 'lawfulBasis', 'dataCategories', 'retentionPolicy', 'version']) this._text(policy[key], key);
+        policy.noticeUrl = this._url(policy.noticeUrl);
+      } catch (e) { throw new AppError(ERROR_CODES.CONFLICT, 'Stored privacy notice is invalid.', 409); }
+    }
+    return { configured: !!policy, policy };
+  },
+  saveNotice(context, payload) {
+    this._root(context);
+    const policy = {};
+    for (const key of ['controller', 'privacyContact', 'purpose', 'lawfulBasis', 'dataCategories', 'retentionPolicy']) {
+      policy[key] = this._text(payload[key], key);
+    }
+    policy.noticeUrl = this._url(payload.noticeUrl);
+    policy.version = this._text(payload.version, 'Notice version', 100);
+    policy.updatedAt = new Date().toISOString();
+    return this._lock(() => {
+      MasterRepository.setGlobalSetting('PRIVACY_NOTICE_JSON', JSON.stringify(policy), context.userId);
+      return { configured: true, policy, auditRecorded: this._audit(context, policy.version, 'PRIVACY_NOTICE_UPDATED') };
+    });
+  },
+  // One calendar month, clamped to the last day of the destination month.
+  responseDueAt(iso) {
+    const date = new Date(iso), day = date.getUTCDate();
+    date.setUTCDate(1); date.setUTCMonth(date.getUTCMonth() + 1);
+    const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+    date.setUTCDate(Math.min(day, last)); return date.toISOString();
+  },
+  submit(context, payload) {
+    const type = payload.type;
+    if (!this.requestTypes.includes(type)) throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Unsupported privacy request type.', 400);
+    const operationId = this._text(payload.operationId, 'Operation ID', 100);
+    if (!/^[a-zA-Z0-9_-]{16,100}$/.test(operationId)) throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid operation ID.', 400);
+    const detail = this._text(payload.detail, 'Request detail', 2000);
+    return this._lock(() => {
+      this._sheet('PrivacyRequests');
+      const id = 'PRV_' + context.userId + '_' + operationId;
+      const existing = MasterRepository.findRowByKey('PrivacyRequests', 'RequestID', id);
+      if (existing) {
+        if (existing.UserID !== context.userId || existing.Type !== type || (existing.Detail !== detail && existing.Detail !== Validation.sanitizeCellValue(detail))) {
+          throw new AppError(ERROR_CODES.CONFLICT, 'Operation ID already belongs to a different request.', 409);
+        }
+        return { request: this._dto(existing), replayed: true };
+      }
+      const now = new Date().toISOString();
+      const record = { RequestID: id, UserID: context.userId, Type: type, Detail: detail,
+        Status: 'PENDING', RequestedAt: now, DueAt: this.responseDueAt(now), Version: 1 };
+      MasterRepository.appendRow('PrivacyRequests', record);
+      return { request: this._dto(record), replayed: false, auditRecorded: this._audit(context, id, 'PRIVACY_REQUEST_SUBMITTED') };
+    });
+  },
+  _dto(record) {
+    const dto = {}; for (const key of MASTER_SCHEMA.PrivacyRequests) dto[key] = record[key] === undefined ? '' : record[key];
+    return dto;
+  },
+  list(context, payload = {}) {
+    const sheet = this._sheet('PrivacyRequests'), last = sheet.getLastRow();
+    const before = payload.before === undefined ? last + 1 : Number(payload.before);
+    if (!Number.isInteger(before) || before < 2 || before > last + 1) throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid page cursor.', 400);
+    const end = before - 1, start = Math.max(2, end - 199);
+    const values = end >= start ? sheet.getRange(start, 1, end - start + 1, MASTER_SCHEMA.PrivacyRequests.length).getValues() : [];
+    const records = values.reverse().map(row => Object.fromEntries(MASTER_SCHEMA.PrivacyRequests.map((key, i) => [key, row[i]])));
+    return { requests: records.filter(row => context.role === CONSTANTS.ROLES.SUPER_ADMIN || row.UserID === context.userId), nextBefore: start > 2 ? start : null };
+  },
+  review(context, payload) {
+    this._root(context);
+    const id = this._text(payload.requestId, 'Request ID', 250);
+    if (!['IN_REVIEW', 'CLOSED'].includes(payload.status)) throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid review status.', 400);
+    const response = this._text(payload.response, 'Response');
+    const evidenceUrl = this._url(payload.evidenceUrl);
+    return this._lock(() => {
+      this._sheet('PrivacyRequests');
+      const row = MasterRepository.findRowByKey('PrivacyRequests', 'RequestID', id);
+      if (!row) throw new AppError(ERROR_CODES.NOT_FOUND, 'Privacy request not found.', 404);
+      if (row.Status === 'CLOSED' || !Number.isInteger(payload.version) || Number(row.Version) !== payload.version) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Request changed or was closed. Reload before recording a decision.', 409);
+      }
+      const changes = { Status: payload.status, Response: response, EvidenceURL: evidenceUrl,
+        ReviewedBy: context.userId, ReviewedAt: new Date().toISOString(), Version: Number(row.Version) + 1 };
+      MasterRepository.updateRow('PrivacyRequests', row._rowIndex, changes);
+      return { request: this._dto({ ...row, ...changes }), auditRecorded: this._audit(context, id, 'PRIVACY_REQUEST_' + payload.status) };
+    });
+  },
+  assurance(context) {
+    this._root(context); this._sheet('ControlEvidence');
+    const records = MasterRepository.getTableData('ControlEvidence').rows;
+    return { assessment: 'NOT_ASSESSED', controls: this.controls.map(control => {
+      const row = records.find(record => record.ControlID === control.id);
+      return { ...control, evidence: row ? { owner: row.Owner, url: row.EvidenceURL, reviewedAt: row.ReviewedAt, nextReviewAt: row.NextReviewAt, notes: row.Notes } : null,
+        state: !row ? 'MISSING_EVIDENCE' : new Date(row.NextReviewAt).getTime() <= Date.now() ? 'REVIEW_OVERDUE' : 'RECORDED_UNVERIFIED' };
+    }) };
+  },
+  saveEvidence(context, payload) {
+    this._root(context);
+    if (!this.controls.some(control => control.id === payload.controlId)) throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Unknown control.', 400);
+    const next = this._text(payload.nextReviewAt, 'Next review date', 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(next) || !Number.isFinite(new Date(next).getTime()) || new Date(next).toISOString().slice(0, 10) !== next) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Use a valid review date, YYYY-MM-DD.', 400);
+    }
+    const record = { ControlID: payload.controlId, Owner: this._text(payload.owner, 'Control owner', 200), EvidenceURL: this._url(payload.evidenceUrl),
+      Notes: this._text(payload.notes, 'Review notes'), ReviewedAt: new Date().toISOString(), ReviewedBy: context.userId, NextReviewAt: next };
+    return this._lock(() => {
+      this._sheet('ControlEvidence');
+      const existing = MasterRepository.findRowByKey('ControlEvidence', 'ControlID', record.ControlID);
+      if (existing) MasterRepository.updateRow('ControlEvidence', existing._rowIndex, record);
+      else MasterRepository.appendRow('ControlEvidence', record);
+      return { recorded: true, auditRecorded: this._audit(context, record.ControlID, 'ASSURANCE_EVIDENCE_RECORDED') };
+    });
+  }
+};
 /* ===== ExportAndMigrationServices.gs ===== */
 /**
  * FLINK Time & Workforce Platform — Export & Migration Services
@@ -14831,6 +15213,6 @@ if (typeof module !== 'undefined' && module.exports) {
     ApprovalService, ReportService, RollupService, DashboardService,
     UserService, AdminRequestService, SetupService, IntegrityService,
     JobService, BackupService, AuditService, NotificationService,
-    ExportService, MigrationService, initializeInstallation: initializeInstallation_
+    ExportService, MigrationService, PrivacyService, initializeInstallation: initializeInstallation_
   };
 }

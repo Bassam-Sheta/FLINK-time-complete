@@ -10,6 +10,7 @@
     timesheetStatus: 'OPEN',
     nextVersion: 2,
     calls: [],
+    privacyRequests: [],
     entries: [{
       entryId: 'E-100',
       projectId: 'P1',
@@ -113,6 +114,19 @@
     const workspaceId = body && body.workspaceId ? body.workspaceId : 'W1';
 
     switch (action) {
+      case 'privacy.notice': return { configured: false, policy: null };
+      case 'privacy.initialize': return { initialized: true, auditRecorded: true };
+      case 'privacy.notice.save': return { configured: true, auditRecorded: true };
+      case 'privacy.requests.list': return { requests: state.privacyRequests, nextBefore: null };
+      case 'privacy.requests.submit': {
+        const existing = state.privacyRequests.find(row => row.RequestID === payload.operationId);
+        if (existing) return { request: existing, replayed: true };
+        const request = { RequestID: payload.operationId, UserID: user().userId, Type: payload.type, Detail: payload.detail, Status: 'PENDING', RequestedAt: nowIso(), DueAt: '2026-10-30T00:00:00.000Z', Version: 1 };
+        state.privacyRequests.push(request); return { request, auditRecorded: true };
+      }
+      case 'assurance.list': return { assessment: 'NOT_ASSESSED', controls: [{ id: 'ACCESS', title: 'Access and MFA review', reference: 'SOC 2 CC6; GDPR Art. 32', state: 'MISSING_EVIDENCE', evidence: null }] };
+      case 'assurance.save': return { recorded: true, auditRecorded: true };
+      case 'privacy.requests.review': return { auditRecorded: true };
       case 'auth.enrollMfa':
         return {secret:'SYNTHETICSECRET',qrUri:'otpauth://totp/FLINK:synthetic?secret=SYNTHETICSECRET',expiresAt:new Date(Date.now()+600000).toISOString()};
       case 'auth.confirmMfa':

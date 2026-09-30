@@ -29,5 +29,6 @@
   "27-IntegrityService.js",
   "28-JobService.js",
   "29-BackupAndAuditServices.js",
+  "31-PrivacyService.js",
   "30-ExportAndMigrationServices.js"
 ]

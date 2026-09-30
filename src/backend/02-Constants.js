@@ -43,6 +43,7 @@ var CONSTANTS = {
   },
 
   REQUEST_STATUS: {
+    RECONCILIATION_REQUIRED: 'RECONCILIATION_REQUIRED',
     PENDING: 'PENDING',
     APPROVED: 'APPROVED',
     REJECTED: 'REJECTED',
@@ -150,6 +151,8 @@ var CONSTANTS = {
   },
 
   MASTER_TABS: {
+    PRIVACY_REQUESTS: 'PrivacyRequests',
+    CONTROL_EVIDENCE: 'ControlEvidence',
     SYSTEM: 'System',
     ACCOUNTS: 'Accounts',
     CREDENTIALS: 'Credentials',
@@ -214,6 +217,8 @@ var CONSTANTS = {
  * Master Control Sheet Column Definitions (18 Tabs)
  */
 var MASTER_SCHEMA = {
+  PrivacyRequests: ['RequestID', 'UserID', 'Type', 'Detail', 'Status', 'RequestedAt', 'DueAt', 'Response', 'EvidenceURL', 'ReviewedBy', 'ReviewedAt', 'Version'],
+  ControlEvidence: ['ControlID', 'Owner', 'EvidenceURL', 'Notes', 'ReviewedAt', 'ReviewedBy', 'NextReviewAt'],
   System: [
     'SystemID', 'InstanceName', 'Version', 'SchemaVersion', 'InstalledAtUTC', 'UpdatedAtUTC', 'LastHealthCheckUTC', 'Status'
   ],

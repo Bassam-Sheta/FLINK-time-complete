@@ -11,7 +11,7 @@
 
 var INSTALLER_RELEASE = Object.freeze({
   repository: 'Bassam-Sheta/FLINK-time-complete',
-  commit: 'c62f527bb50df304cd08dff981a12f306bc81754',
+  commit: 'b0d7787d7413ccf7c57c1d1e75d5505b4ed224e2',
   files: [
     { path: 'apps-script/Code.gs', name: 'Code', type: 'SERVER_JS' },
     { path: 'apps-script/User.html', name: 'User', type: 'HTML' },
@@ -32,10 +32,12 @@ function doGet() {
 }
 
 function getInstallerInfo() {
+  const checkpoint = readInstallCheckpoint_();
   return {
     releaseCommit: INSTALLER_RELEASE.commit,
     apiSettingsUrl: INSTALLER_LINKS.apiSettings,
-    installerEmail: getInstallerEmail_()
+    installerEmail: getInstallerEmail_(),
+    recoveryStage: checkpoint ? checkpoint.stage : ''
   };
 }
 
@@ -44,16 +46,32 @@ function installFlinkTime() {
   lock.waitLock(10000);
 
   let spreadsheetId = '';
-  let installed = false;
   let cleanupSucceeded = null;
+  let checkpoint = null;
 
   try {
     const ownerEmail = getInstallerEmail_();
+    checkpoint = readInstallCheckpoint_();
+    if (checkpoint && (checkpoint.ownerEmail !== ownerEmail || checkpoint.releaseCommit !== INSTALLER_RELEASE.commit)) {
+      throw installerError_('RECOVERY_REVIEW_REQUIRED', 'An earlier installation belongs to another identity or release. Review its private checkpoint before starting another installation.');
+    }
+    if (checkpoint && checkpoint.stage === 'COMPLETE') return checkpoint.result;
+    if (checkpoint && !['SHEET_CREATED', 'PROJECT_CREATED', 'CONTENT_PENDING', 'CONTENT_SAVED', 'VERSION_CREATED'].includes(checkpoint.stage)) {
+      throw installerError_('OUTCOME_UNKNOWN', 'A previous Google operation has an unknown outcome. Inspect the Master Sheet and Apps Script project before retrying; another installation has not been created.');
+    }
+    if (!checkpoint) {
+      checkpoint = { ownerEmail, releaseCommit: INSTALLER_RELEASE.commit, stage: 'SHEET_PENDING' };
+      saveInstallCheckpoint_(checkpoint);
+    }
 
-    const spreadsheet = SpreadsheetApp.create('FLINK Time Master');
+    const spreadsheet = checkpoint.spreadsheetId ? SpreadsheetApp.openById(checkpoint.spreadsheetId) : SpreadsheetApp.create('FLINK Time Master');
     spreadsheetId = spreadsheet.getId();
+    if (!checkpoint.spreadsheetId) { checkpoint.spreadsheetId = spreadsheetId; checkpoint.stage = 'SHEET_CREATED'; saveInstallCheckpoint_(checkpoint); }
 
-    const project = callAppsScriptApi_(
+    let project = { scriptId: checkpoint.scriptId };
+    if (!checkpoint.scriptId) {
+      checkpoint.stage = 'PROJECT_PENDING'; saveInstallCheckpoint_(checkpoint);
+      project = callAppsScriptApi_(
       'post',
       '/v1/projects',
       {
@@ -61,6 +79,7 @@ function installFlinkTime() {
         parentId: spreadsheetId
       }
     );
+    }
 
     const scriptId = String(project && project.scriptId || '');
     if (!scriptId) {
@@ -69,20 +88,29 @@ function installFlinkTime() {
         'Google created the Master Sheet but did not return a bound Apps Script project.'
       );
     }
+    if (!checkpoint.scriptId) { checkpoint.scriptId = scriptId; checkpoint.stage = 'PROJECT_CREATED'; saveInstallCheckpoint_(checkpoint); }
 
-    const files = loadReleaseFiles_(spreadsheetId, ownerEmail);
+    if (['PROJECT_CREATED', 'CONTENT_PENDING'].includes(checkpoint.stage)) {
+      const files = loadReleaseFiles_(spreadsheetId, ownerEmail);
+      checkpoint.stage = 'CONTENT_PENDING'; saveInstallCheckpoint_(checkpoint);
 
     callAppsScriptApi_(
       'put',
       '/v1/projects/' + encodeURIComponent(scriptId) + '/content',
       { files: files }
     );
+      checkpoint.stage = 'CONTENT_SAVED'; saveInstallCheckpoint_(checkpoint);
+    }
 
-    const version = callAppsScriptApi_(
+    let version = { versionNumber: checkpoint.versionNumber };
+    if (!checkpoint.versionNumber) {
+      checkpoint.stage = 'VERSION_PENDING'; saveInstallCheckpoint_(checkpoint);
+      version = callAppsScriptApi_(
       'post',
       '/v1/projects/' + encodeURIComponent(scriptId) + '/versions',
       { description: 'FLINK Time automated installation ' + INSTALLER_RELEASE.commit.slice(0, 12) }
     );
+    }
 
     const versionNumber = Number(version && version.versionNumber);
     if (!Number.isInteger(versionNumber) || versionNumber < 1) {
@@ -91,7 +119,9 @@ function installFlinkTime() {
         'Google did not return a valid FLINK Time version number.'
       );
     }
+    checkpoint.versionNumber = versionNumber; checkpoint.stage = 'VERSION_CREATED'; saveInstallCheckpoint_(checkpoint);
 
+    checkpoint.stage = 'DEPLOYMENT_PENDING'; saveInstallCheckpoint_(checkpoint);
     const deployment = callAppsScriptApi_(
       'post',
       '/v1/projects/' + encodeURIComponent(scriptId) + '/deployments',
@@ -110,9 +140,7 @@ function installFlinkTime() {
       );
     }
 
-    installed = true;
-
-    return {
+    const result = {
       ok: true,
       releaseCommit: INSTALLER_RELEASE.commit,
       spreadsheetId: spreadsheetId,
@@ -125,10 +153,12 @@ function installFlinkTime() {
       adminUrl: webAppUrl + '?view=admin',
       superAdminUrl: webAppUrl + '?view=superadmin'
     };
+    checkpoint.stage = 'COMPLETE'; checkpoint.result = result; saveInstallCheckpoint_(checkpoint);
+    return result;
   } catch (err) {
-    if (spreadsheetId && !installed) {
-      cleanupSucceeded = cleanupFailedInstallation_(spreadsheetId);
-    }
+    // Google may have committed even when its response or checkpoint write fails.
+    // Preserve resources and the durable stage; never trash a possibly live system.
+    if (!spreadsheetId && checkpoint) spreadsheetId = checkpoint.spreadsheetId || '';
 
     console.error(
       'FLINK installer failure: ' +
@@ -147,13 +177,26 @@ function installFlinkTime() {
       code: code,
       message: message,
       cleanupSucceeded: cleanupSucceeded,
-      incompleteSpreadsheetUrl: cleanupSucceeded === false && spreadsheetId
+      recoveryStage: checkpoint ? checkpoint.stage : '',
+      scriptUrl: checkpoint && checkpoint.scriptId ? 'https://script.google.com/home/projects/' + encodeURIComponent(checkpoint.scriptId) + '/edit' : '',
+      incompleteSpreadsheetUrl: spreadsheetId
         ? 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(spreadsheetId) + '/edit' : '',
       apiSettingsUrl: INSTALLER_LINKS.apiSettings
     };
   } finally {
     try { lock.releaseLock(); } catch (e) {}
   }
+}
+
+function readInstallCheckpoint_() {
+  const raw = PropertiesService.getUserProperties().getProperty('FLINK_INSTALL_CHECKPOINT');
+  if (!raw) return null;
+  try { const record = JSON.parse(raw); if (!record || typeof record.stage !== 'string') throw new Error(); return record; }
+  catch (error) { throw installerError_('RECOVERY_REVIEW_REQUIRED', 'The private installation checkpoint is invalid. Review it before creating another installation.'); }
+}
+
+function saveInstallCheckpoint_(record) {
+  PropertiesService.getUserProperties().setProperty('FLINK_INSTALL_CHECKPOINT', JSON.stringify(record));
 }
 
 function getInstallerEmail_() {
@@ -330,19 +373,6 @@ function extractWebAppUrl_(deployment) {
     }
   }
   return '';
-}
-
-function cleanupFailedInstallation_(spreadsheetId) {
-  try {
-    DriveApp.getFileById(spreadsheetId).setTrashed(true);
-    return true;
-  } catch (cleanupErr) {
-    console.error(
-      'Failed to trash incomplete FLINK Time Master Sheet: ' +
-      (cleanupErr && cleanupErr.message ? cleanupErr.message : String(cleanupErr))
-    );
-    return false;
-  }
 }
 
 function escapeSingleQuotedJs_(value) {
