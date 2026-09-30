@@ -76,7 +76,7 @@ const server = http.createServer((req, res) => {
   res.end(pageHtml(url.pathname));
 });
 
-server.listen(4173, '127.0.0.1', () => {
+server.listen(Number(process.env.FLINK_TEST_PORT || 4173), '127.0.0.1', () => {
   process.stdout.write('FLINK browser-test server listening on 4173\n');
 });
 

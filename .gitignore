@@ -20,6 +20,9 @@ artifacts/screenshots/
 artifacts/evidence/
 *-tests.txt
 all-tests.txt
+artifacts/*.log
+artifacts/*audit*.json
+artifacts/a11y*.json
 wave*-tests.txt
 .pw-browsers/
 

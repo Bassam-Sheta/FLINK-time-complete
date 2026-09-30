@@ -82,6 +82,7 @@ test('legacy package tree and executable artifacts are absent from active source
 
   function walk(dir) {
     return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+      if (entry.isDirectory() && ['.git', 'node_modules', 'artifacts', 'test-results', 'playwright-report'].includes(entry.name)) return [];
       const full = path.join(dir, entry.name);
       return entry.isDirectory() ? walk(full) : [full];
     });

@@ -20,7 +20,9 @@ After the user grants Google's required management access, the installer:
 10. returns the Master Sheet, Employee, Admin, and Super Admin links;
 11. opens Super Admin setup.
 
-If installation fails before completion, the installer attempts to move the incomplete Master Sheet to Trash.
+The installer saves a private checkpoint for the installing Google user. A repeated successful installation returns the existing receipt. A failed content upload can resume through its idempotent PUT. Unknown Sheet/project/version/deployment creation outcomes stop for owner reconciliation and preserve resources; they are never automatically deleted or created again. Review the reported recovery stage and resource links before retrying. Keep the installer pinned to the same release while recovering.
+
+For `*_PENDING` creation stages, inspect the user’s Google Drive and Apps Script resources, including any deployment permissions. Reconcile the actual resource IDs with the private `FLINK_INSTALL_CHECKPOINT` User Property through the installer project. Do not reset or remove that property until the outcome has been established and unused resources have been deliberately handled. This procedure needs an owner; the code does not provide automatic recovery from an ambiguous Google response.
 
 ### What the user still approves
 

@@ -460,6 +460,6 @@ if (typeof module !== 'undefined' && module.exports) {
     ApprovalService, ReportService, RollupService, DashboardService,
     UserService, AdminRequestService, SetupService, IntegrityService,
     JobService, BackupService, AuditService, NotificationService,
-    ExportService, MigrationService, initializeInstallation: initializeInstallation_
+    ExportService, MigrationService, PrivacyService, initializeInstallation: initializeInstallation_
   };
 }

@@ -1,6 +1,7 @@
 'use strict';
 
 const { defineConfig, devices } = require('@playwright/test');
+const port = Number(process.env.FLINK_TEST_PORT || 4173);
 
 module.exports = defineConfig({
   testDir: './tests/browser',
@@ -10,7 +11,7 @@ module.exports = defineConfig({
   fullyParallel: false,
   reporter: [['line']],
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: 'http://127.0.0.1:' + port,
     headless: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
@@ -18,8 +19,8 @@ module.exports = defineConfig({
   },
   webServer: {
     command: 'node tests/browser/server.js',
-    port: 4173,
-    reuseExistingServer: false,
+    port,
+    reuseExistingServer: process.env.FLINK_REUSE_TEST_SERVER === '1',
     timeout: 15000
   },
   projects: [

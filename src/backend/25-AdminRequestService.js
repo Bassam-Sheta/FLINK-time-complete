@@ -34,7 +34,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
     const requestedData = this._safeRequestedData(payload.requestedData);
     AuthorizationService.assertWorkspaceAccess(adminContext, workspaceId);
 
-    if (!Object.values(CONSTANTS.REQUEST_TYPES).includes(requestType)) {
+    if (![CONSTANTS.REQUEST_TYPES.NEW_USER, CONSTANTS.REQUEST_TYPES.MAKE_PASSIVE, CONSTANTS.REQUEST_TYPES.PASSWORD_RESET].includes(requestType)) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Invalid request type: ${requestType}`);
     }
 
@@ -235,6 +235,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
       lock.releaseLock();
     }
 
+    let executionAttempted = false;
     try {
       const originWorkspace = MasterRepository.getWorkspace(req.WorkspaceID);
       if (!originWorkspace || originWorkspace.Status !== CONSTANTS.WORKSPACE_STATUS.ACTIVE) {
@@ -271,6 +272,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
         );
         requestedData.email = Validation.validateEmail(requestedData.email);
 
+        executionAttempted = true;
         executionResult = UserService.createUser(superAdminContext, {
           username: requestedData.username,
           displayName: requestedData.displayName,
@@ -309,6 +311,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
         }
 
         if (req.RequestType === CONSTANTS.REQUEST_TYPES.MAKE_PASSIVE) {
+          executionAttempted = true;
           executionResult = UserService.makeUserPassive(
             superAdminContext,
             req.TargetUserID,
@@ -316,6 +319,7 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
           );
         } else {
           const tempPassword = SecurityService.generateTemporaryPassword();
+          executionAttempted = true;
           executionResult = AuthService.resetPasswordByAdmin(
             superAdminContext,
             req.TargetUserID,
@@ -336,7 +340,8 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
         ExecutedAt: new Date().toISOString()
       });
 
-      MasterRepository.logGlobalAudit({
+      let auditRecorded = false;
+      try { auditRecorded = MasterRepository.logGlobalAudit({
         ActorUserID: superAdminContext.userId,
         ActorRole: superAdminContext.role,
         WorkspaceID: req.WorkspaceID,
@@ -345,18 +350,18 @@ var AdminRequestService = (typeof global !== 'undefined' && global.AdminRequestS
         Action: CONSTANTS.AUDIT_EVENTS.REQUEST_EXECUTED,
         AfterJSON: updated,
         Reason: reviewComment
-      });
+      }) === true; } catch (auditError) { console.error('Request committed but audit logging failed.'); }
 
-      return { ok: true, request: updated, executionResult };
+      return { ok: true, request: updated, executionResult, auditRecorded };
     } catch (executionErr) {
-      // Release the execution claim for a safe retry while preserving the error
-      // to the reviewer. Another reviewer can only retry after this reset.
+      // A service or Sheets call can commit before its response fails. Do not
+      // automatically retry an uncertain mutation and duplicate its effects.
       try {
         MasterRepository.updateRequest(requestId, {
-          Status: CONSTANTS.REQUEST_STATUS.PENDING,
-          ReviewedBy: '',
-          ReviewedAt: '',
-          ReviewComment: ''
+          Status: executionAttempted ? 'RECONCILIATION_REQUIRED' : CONSTANTS.REQUEST_STATUS.PENDING,
+          ReviewedBy: executionAttempted ? superAdminContext.userId : '',
+          ReviewedAt: executionAttempted ? now : '',
+          ReviewComment: executionAttempted ? 'Execution outcome needs owner reconciliation. Inspect the target account and workspace before any new request.' : ''
         });
       } catch (resetErr) {
         console.error(

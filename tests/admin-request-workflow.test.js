@@ -260,7 +260,7 @@ test('already claimed request cannot execute a second time', () => {
   assert.equal(executions, 0);
 });
 
-test('failed execution releases claim back to PENDING for controlled retry', () => {
+test('uncertain execution blocks automatic retry until owner reconciliation', () => {
   const statuses = [];
   const req = {
     RequestID:'R1',
@@ -302,8 +302,9 @@ test('failed execution releases claim back to PENDING for controlled retry', () 
     /provision failed/
   );
 
-  assert.deepEqual(statuses, ['APPROVED', 'PENDING']);
-  assert.equal(req.Status, 'PENDING');
+  assert.deepEqual(statuses, ['APPROVED', 'RECONCILIATION_REQUIRED']);
+  assert.equal(req.Status, 'RECONCILIATION_REQUIRED');
+  assert.throws(() => service.reviewRequest({ userId:'SA1', role:'SUPER_ADMIN' }, 'R1', { action:'APPROVE' }), /already been/);
 });
 
 test('request from inactive originating workspace cannot execute', () => {

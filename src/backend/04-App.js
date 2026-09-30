@@ -218,6 +218,14 @@ function doPost(e) {
  * role authorizations, workspace binding, and mutation requirements.
  */
 const ACTION_PERMISSIONS = {
+  'privacy.notice': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: false },
+  'privacy.requests.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: false },
+  'privacy.requests.submit': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN, CONSTANTS.ROLES.ADMIN, CONSTANTS.ROLES.USER], isWrite: true },
+  'privacy.initialize': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'privacy.notice.save': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'privacy.requests.review': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
+  'assurance.list': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: false },
+  'assurance.save': { authRequired: true, roles: [CONSTANTS.ROLES.SUPER_ADMIN], isWrite: true },
   // Public / Unauthenticated
   'auth.login': { authRequired: false, isWrite: true },
   'auth.verifyMfa': { authRequired: false, isWrite: true },
@@ -328,6 +336,7 @@ const ACTION_PERMISSIONS = {
 };
 
 const PRIVILEGED_STEP_UP_ACTIONS = new Set([
+  'privacy.initialize', 'privacy.notice.save', 'privacy.requests.review', 'assurance.save',
   'workspaces.create',
   'workspaces.assignAdmin',
   'workspaces.removeAdmin',
@@ -541,6 +550,14 @@ function dispatchAction_(action, data) {
   }
 
   switch (action) {
+    case 'privacy.notice': return PrivacyService.getNotice();
+    case 'privacy.requests.list': return PrivacyService.list(authContext, payload);
+    case 'privacy.requests.submit': return PrivacyService.submit(authContext, payload);
+    case 'privacy.initialize': return PrivacyService.initialize(authContext);
+    case 'privacy.notice.save': return PrivacyService.saveNotice(authContext, payload);
+    case 'privacy.requests.review': return PrivacyService.review(authContext, payload);
+    case 'assurance.list': return PrivacyService.assurance(authContext);
+    case 'assurance.save': return PrivacyService.saveEvidence(authContext, payload);
     case 'auth.validateSession':
       return { user: authContext.user, role: authContext.role, mfaEnrollmentRequired: needsMfaEnrollment };
 
