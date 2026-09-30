@@ -217,3 +217,21 @@ test('restore status and prepare enforce the real dispatcher MFA, role and step-
     backend.SessionService.validateSession = saved.validate; backend.AuthService.hasVerifiedMfaSession = saved.mfa; backend.AuthService.assertStepUp = saved.step;
   }
 });
+
+test('privileged backup audit follows the actual payload target after page workspace changes', () => {
+  const backend = require('../apps-script/Code.gs');
+  const saved = { validate: backend.SessionService.validateSession, mfa: backend.AuthService.hasVerifiedMfaSession, step: backend.AuthService.assertStepUp,
+    audit: backend.AuditService.requirePrivilegedActionAudit, prepare: backend.BackupService.prepareRestore };
+  const observed = [];
+  try {
+    backend.SessionService.validateSession = () => ({ userId: 'ROOT', role: 'SUPER_ADMIN', user: { Role: 'SUPER_ADMIN' } });
+    backend.AuthService.hasVerifiedMfaSession = () => true; backend.AuthService.assertStepUp = () => true;
+    backend.AuditService.requirePrivilegedActionAudit = (_context, _action, workspaceId) => observed.push(['audit', workspaceId]);
+    backend.BackupService.prepareRestore = (_context, workspaceId) => observed.push(['target', workspaceId]);
+    backend.dispatchAction('backups.restorePrepare', { sessionToken: 'ROOT', workspaceId: 'W2', payload: { workspaceId: 'W1' } });
+    assert.deepEqual(observed, [['audit', 'W1'], ['target', 'W1']]);
+  } finally {
+    backend.SessionService.validateSession = saved.validate; backend.AuthService.hasVerifiedMfaSession = saved.mfa; backend.AuthService.assertStepUp = saved.step;
+    backend.AuditService.requirePrivilegedActionAudit = saved.audit; backend.BackupService.prepareRestore = saved.prepare;
+  }
+});

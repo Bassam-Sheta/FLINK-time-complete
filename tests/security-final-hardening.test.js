@@ -20,7 +20,7 @@ test('high-risk Super Admin actions require short-lived server-bound step-up aut
   assert.match(src, /STEP_UP_TTL_MINUTES:\s*5/);
   assert.match(src, /const PRIVILEGED_STEP_UP_ACTIONS = new Set\(\[/);
   assert.match(src, /AuthService\.assertStepUp\(authContext, payload\.stepUpToken \|\| ''\)/);
-  assert.match(src, /requirePrivilegedActionAudit\(authContext, action, wsId \|\| ''\)/);
+  assert.match(src, /requirePrivilegedActionAudit\(authContext, action, auditWorkspaceId \|\| ''\)/);
   assert.match(src, /'users\.assignWorkspace'/);
   assert.match(src, /_deleteStepUp\(authContext\.session\.SessionID\)/);
   assert.match(src, /SessionService\.revokeSession\(rawSessionToken\)/);

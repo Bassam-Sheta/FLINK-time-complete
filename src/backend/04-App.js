@@ -549,7 +549,10 @@ function dispatchAction_(action, data) {
     PRIVILEGED_STEP_UP_ACTIONS.has(action)
   ) {
     AuthService.assertStepUp(authContext, payload.stepUpToken || '');
-    AuditService.requirePrivilegedActionAudit(authContext, action, wsId || '');
+    // Backup routes take their target from the payload before the page's
+    // workspace header. Audit the same target when the page selection changes.
+    const auditWorkspaceId = action.startsWith('backups.') ? payload.workspaceId || wsId : wsId;
+    AuditService.requirePrivilegedActionAudit(authContext, action, auditWorkspaceId || '');
   }
 
   switch (action) {
