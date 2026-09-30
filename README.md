@@ -1,4 +1,6 @@
-# FLINK Time & Workforce Platform
+# FLINK-time-complete
+
+Google Workspace time tracking and workforce management with full role-based GUI.
 
 Google Workspace-native time tracking and workforce management. This edition uses server-observed Google identity plus mandatory app MFA; FLINK does not ask for or store Google passwords.
 
