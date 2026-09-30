@@ -10,8 +10,8 @@
  */
 
 var INSTALLER_RELEASE = Object.freeze({
-  repository: 'Bassam-Sheta/FLINK-time',
-  commit: 'ba3cb0408a867fd48ea5948e3f0a88b39e139739',
+  repository: 'Bassam-Sheta/FLINK-time-complete',
+  commit: 'c62f527bb50df304cd08dff981a12f306bc81754',
   files: [
     { path: 'apps-script/Code.gs', name: 'Code', type: 'SERVER_JS' },
     { path: 'apps-script/User.html', name: 'User', type: 'HTML' },
